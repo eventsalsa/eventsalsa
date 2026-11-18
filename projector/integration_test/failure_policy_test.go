@@ -9,11 +9,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
-	projectorfailure "github.com/eventsalsa/projector/failure"
+	projectorpkg "eventsalsa.dev/projector"
+	projectorfailure "eventsalsa.dev/projector/failure"
 )
 
 func TestFailurePolicy_RetryableFailureIsNotFatal(t *testing.T) {

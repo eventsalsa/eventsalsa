@@ -15,9 +15,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/projector"
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/projector"
+	"eventsalsa.dev/store"
+	storepostgres "eventsalsa.dev/store/postgres"
 )
 
 // LoggingObserver logs batch and lifecycle events using structured logging (slog).
@@ -129,23 +129,28 @@ func (p *ExampleProjection) Name() string {
 	return "orders_summary"
 }
 
-func (p *ExampleProjection) Handle(_ context.Context, _ pgx.Tx, _ store.PersistedEvent) error {
+func (p *ExampleProjection) Handle(_ context.Context, _ pgx.Tx, _ store.PersistedEvent) error { //nolint:gocritic // hugeParam: matches projector.Projection signature
 	return nil
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:postgres@localhost:5432/eventsalsa_test?sslmode=disable"
+		// #nosec G101 -- local development example default DSN
+		connStr = "postgres://postgres:postgres@localhost:5432/eventsalsa_test?sslmode=disable" //nolint:gosec // G101: local development example default DSN
 	}
 
 	db, err := pgxpool.New(ctx, connStr)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 
@@ -159,7 +164,7 @@ func main() {
 	registry := projector.NewRegistry()
 	if err := registry.Add(&ExampleProjection{}, projector.OnStreamTypes("Order")); err != nil {
 		slog.Error("failed to register projection", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	daemon := projector.New(
@@ -174,6 +179,7 @@ func main() {
 	slog.Info("starting projector daemon with telemetry observer...")
 	if err := daemon.Start(ctx); err != nil {
 		slog.Error("daemon exited with error", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

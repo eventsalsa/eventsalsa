@@ -3,9 +3,9 @@ package projector
 import (
 	"time"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 
-	"github.com/eventsalsa/projector/postgres"
+	"eventsalsa.dev/projector/postgres"
 )
 
 // DispatcherStrategy selects how the daemon wakeup dispatcher detects new events.

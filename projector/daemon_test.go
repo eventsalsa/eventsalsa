@@ -11,14 +11,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/projector/dispatcher"
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	"eventsalsa.dev/store"
+
+	"eventsalsa.dev/projector/dispatcher"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 type stubProjectorStore struct {
@@ -468,6 +470,10 @@ func (r *stubPgxRows) RawValues() [][]byte {
 }
 
 func (r *stubPgxRows) Conn() *pgx.Conn {
+	return nil
+}
+
+func (r *stubPgxRows) TypeMap() *pgtype.Map {
 	return nil
 }
 

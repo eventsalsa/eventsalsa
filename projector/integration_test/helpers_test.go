@@ -17,13 +17,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/eventsalsa/store"
-	storemigrations "github.com/eventsalsa/store/migrations"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	storemigrations "eventsalsa.dev/store/migrations"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
-	projectormigrations "github.com/eventsalsa/projector/migrations"
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	projectorpkg "eventsalsa.dev/projector"
+	projectormigrations "eventsalsa.dev/projector/migrations"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 func TestMain(m *testing.M) {

@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	storepostgres "github.com/eventsalsa/store/postgres"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
+	projectorpkg "eventsalsa.dev/projector"
 )
 
 func TestDetachedProjection_FilterWithNoMatchesStillAdvancesCheckpoint(t *testing.T) {

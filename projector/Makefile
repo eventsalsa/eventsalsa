@@ -1,29 +1,43 @@
-.PHONY: help test test-unit test-integration test-integration-local lint fmt build check
+.PHONY: help check test test-unit test-integration test-integration-local lint fmt fmt-check vet gosec govulncheck build
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-check: lint test test-integration ## Run all checks (lint, unit tests, integration tests)
+check: fmt-check vet lint test-unit test-integration gosec govulncheck ## Run all checks
 
 test: test-unit ## Run all tests
 
 test-unit: ## Run unit tests
-	go test -v -race -coverprofile=coverage.out ./...
+	go test -v -race -count=1 -coverprofile=coverage.out ./...
 
 test-integration: ## Run integration tests (uses testcontainers-go)
-	go test -p 1 -v -tags=integration ./...
+	go test -p 1 -v -race -count=1 -tags=integration ./...
 
-test-integration-local: test-integration ## Run integration tests locally (alias for test-integration)
+test-integration-local: test-integration ## Alias for test-integration
+
+vet: ## Run go vet
+	go vet ./...
 
 lint: ## Run linter
-	golangci-lint run --timeout=5m
+	golangci-lint run --config=../.golangci.yml --timeout=5m ./...
 
 fmt: ## Format code
 	gofmt -w -s .
-	goimports -w -local github.com/eventsalsa/projector .
+	goimports -w -local eventsalsa.dev .
+
+fmt-check: ## Check code formatting
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run make fmt to fix"; exit 1; }
+
+gosec: ## Run gosec security scanner
+	@tmp=$$(mktemp --suffix=.sarif); \
+	gosec -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
+	rm -f "$$tmp"
+
+govulncheck: ## Run vulnerability checker
+	govulncheck ./...
 
 build: ## Build all packages
 	go build -v ./...

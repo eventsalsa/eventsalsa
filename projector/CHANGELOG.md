@@ -1,5 +1,7 @@
 # Changelog
 
+> **Monorepo Cutover (`v0.6.0`+):** After `v0.5.0`, `projector` moved from `github.com/eventsalsa/projector` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/projector`. Historical entries below are preserved from the original repository.
+
 ## [0.5.0](https://github.com/eventsalsa/projector/compare/v0.4.0...v0.5.0) (2026-10-11)
 
 

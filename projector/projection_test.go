@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/eventsalsa/store"
 	"github.com/google/uuid"
+
+	"eventsalsa.dev/store"
 )
 
 func TestFilterStreamTypes(t *testing.T) {

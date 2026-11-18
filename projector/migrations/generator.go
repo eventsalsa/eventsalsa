@@ -51,7 +51,7 @@ func DefaultConfig() Config {
 func GeneratePostgres(config *Config) error {
 	normalized := normalizeConfig(config)
 
-	if err := os.MkdirAll(normalized.OutputFolder, 0o755); err != nil {
+	if err := os.MkdirAll(normalized.OutputFolder, 0o750); err != nil {
 		return fmt.Errorf("failed to create output folder: %w", err)
 	}
 

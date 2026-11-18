@@ -3,8 +3,9 @@ package projector
 import (
 	"context"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 // Projection defines the interface for event projection handlers.

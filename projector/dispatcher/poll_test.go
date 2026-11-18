@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 type mockPositionQuerier struct {

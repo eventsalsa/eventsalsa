@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/eventsalsa/store"
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/projector/failure"
+	"eventsalsa.dev/store"
+
+	"eventsalsa.dev/projector/failure"
 )
 
 func TestRegistryResolvesFailurePolicyByShape(t *testing.T) {

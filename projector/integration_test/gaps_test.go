@@ -12,11 +12,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	projectorpkg "eventsalsa.dev/projector"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 // slowTxProjection is a transactional projection that holds its batch open for a

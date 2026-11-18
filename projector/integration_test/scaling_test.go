@@ -12,9 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	storepostgres "github.com/eventsalsa/store/postgres"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 func TestComprehensiveScaleUpAndDown(t *testing.T) {

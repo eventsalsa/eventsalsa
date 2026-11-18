@@ -1,11 +1,11 @@
 # eventsalsa/projector
 
-[![CI](https://github.com/eventsalsa/projector/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/projector/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/eventsalsa/projector.svg)](https://pkg.go.dev/github.com/eventsalsa/projector)
+[![CI](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/eventsalsa.dev/projector.svg)](https://pkg.go.dev/eventsalsa.dev/projector)
 
-`github.com/eventsalsa/projector` is a horizontally scalable, PostgreSQL-native projection processing module for event-sourced systems.
+`eventsalsa.dev/projector` is a horizontally scalable, PostgreSQL-native projection processing module for event-sourced systems.
 
-It builds on [`github.com/eventsalsa/store`](https://github.com/eventsalsa/store) and adds daemon coordination, leader election, projection assignment, checkpointing, wakeup dispatching, and batched transactional event processing with no external coordination service.
+It builds on [`eventsalsa.dev/store`](https://github.com/eventsalsa/eventsalsa/tree/main/store) and adds daemon coordination, leader election, projection assignment, checkpointing, wakeup dispatching, and batched transactional event processing with no external coordination service.
 
 ## Features
 
@@ -69,16 +69,16 @@ The module intentionally favors simple, database-native coordination:
 ## Installation
 
 ```bash
-go get github.com/eventsalsa/projector
+go get eventsalsa.dev/projector
 ```
 
-The module is intended to be used alongside `github.com/eventsalsa/store` and its PostgreSQL implementation.
+The module is intended to be used alongside `eventsalsa.dev/store` and its PostgreSQL implementation.
 
 ## Prerequisites
 
 - Go 1.24+
 - PostgreSQL 16+
-- [`github.com/eventsalsa/store`](https://github.com/eventsalsa/store)
+- [`eventsalsa.dev/store`](https://github.com/eventsalsa/eventsalsa/tree/main/store)
 - `golangci-lint` for local linting
 - Docker (optional, for local integration testing)
 
@@ -88,8 +88,8 @@ The module is intended to be used alongside `github.com/eventsalsa/store` and it
 
 You need:
 
-- the event store tables from `github.com/eventsalsa/store`
-- the projector metadata tables generated from `github.com/eventsalsa/projector/cmd/migrate-gen`
+- the event store tables from `eventsalsa.dev/store`
+- the projector metadata tables generated from `eventsalsa.dev/projector/cmd/migrate-gen`
 
 ### 2. Build and run the projector daemon
 
@@ -107,9 +107,9 @@ import (
     "github.com/jackc/pgx/v5"
     "github.com/jackc/pgx/v5/pgxpool"
 
-    "github.com/eventsalsa/projector"
-    "github.com/eventsalsa/store"
-    storepostgres "github.com/eventsalsa/store/postgres"
+    "eventsalsa.dev/projector"
+    "eventsalsa.dev/store"
+    storepostgres "eventsalsa.dev/store/postgres"
 )
 
 type AccountProjection struct{}
@@ -364,7 +364,7 @@ A detached batch cycle can therefore take up to `BatchTimeout + CheckpointTimeou
 Projection failures are classified so the daemon can decide whether to keep going. Classify an error at the failure site with the `failure` package:
 
 ```go
-import projectorfailure "github.com/eventsalsa/projector/failure"
+import projectorfailure "eventsalsa.dev/projector/failure"
 
 func (p *ProductProjection) Handle(ctx context.Context, event store.PersistedEvent) error {
     if err := p.client.Upsert(ctx, documentFor(event)); err != nil {
@@ -471,7 +471,7 @@ If a stale-gap decision later proves too aggressive for a projection, the recove
 For the quickest path, use the stable `cmd/migrate-gen` entrypoint.
 
 ```bash
-go run github.com/eventsalsa/projector/cmd/migrate-gen \
+go run eventsalsa.dev/projector/cmd/migrate-gen \
   -output ./db/migrations \
   -filename 002_projector_tables.sql
 ```
@@ -479,7 +479,7 @@ go run github.com/eventsalsa/projector/cmd/migrate-gen \
 The CLI defaults match `migrations.DefaultConfig()`, and you can override table names to line up with `projector.With*Table(...)` options:
 
 ```bash
-go run github.com/eventsalsa/projector/cmd/migrate-gen \
+go run eventsalsa.dev/projector/cmd/migrate-gen \
   -output ./db/migrations \
   -projector-instances-table infra.projector_instances \
   -projection-assignments-table infra.projection_assignments \
@@ -496,7 +496,7 @@ package main
 import (
     "log"
 
-    "github.com/eventsalsa/projector/migrations"
+    "eventsalsa.dev/projector/migrations"
 )
 
 func main() {
@@ -566,7 +566,7 @@ import (
 
     "golang.org/x/sync/errgroup"
 
-    "github.com/eventsalsa/projector"
+    "eventsalsa.dev/projector"
 )
 
 func main() {
@@ -658,7 +658,7 @@ import (
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promauto"
 
-    "github.com/eventsalsa/projector"
+    "eventsalsa.dev/projector"
 )
 
 type PrometheusObserver struct {
@@ -710,7 +710,7 @@ See [`examples/telemetry/main.go`](examples/telemetry/main.go) for a complete ru
 ### Clone and set up
 
 ```bash
-git clone https://github.com/eventsalsa/projector.git
+git clone https://github.com/eventsalsa/eventsalsa.git
 cd projector
 go mod download
 ```

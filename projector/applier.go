@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 // applier is the daemon's normalized view of a projection handler. The four

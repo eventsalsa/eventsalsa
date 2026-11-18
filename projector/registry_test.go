@@ -5,8 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 type stubTxProjection struct {

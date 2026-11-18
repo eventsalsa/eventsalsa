@@ -2,11 +2,11 @@
 //
 // Usage:
 //
-//	go run github.com/eventsalsa/projector/cmd/migrate-gen -output migrations -filename init_projector.sql
+//	go run eventsalsa.dev/projector/cmd/migrate-gen -output migrations -filename init_projector.sql
 //
 // Or with go generate:
 //
-//	//go:generate go run github.com/eventsalsa/projector/cmd/migrate-gen -output migrations
+//	//go:generate go run eventsalsa.dev/projector/cmd/migrate-gen -output migrations
 package main
 
 import (
@@ -17,7 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/eventsalsa/projector/migrations"
+	"eventsalsa.dev/projector/migrations"
 )
 
 func main() {
@@ -58,10 +58,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := migrations.GeneratePostgres(&config); err != nil {
-		fmt.Fprintf(stderr, "Error generating migration: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "Error generating migration: %v\n", err); writeErr != nil {
+			return 1
+		}
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "Generated PostgreSQL migration: %s\n", filepath.Join(config.OutputFolder, config.OutputFilename))
+	if _, err := fmt.Fprintf(stdout, "Generated PostgreSQL migration: %s\n", filepath.Join(config.OutputFolder, config.OutputFilename)); err != nil {
+		return 1
+	}
 	return 0
 }

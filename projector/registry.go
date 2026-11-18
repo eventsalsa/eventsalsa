@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 var (

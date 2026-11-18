@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	storepostgres "github.com/eventsalsa/store/postgres"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
-	projectormigrations "github.com/eventsalsa/projector/migrations"
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	projectorpkg "eventsalsa.dev/projector"
+	projectormigrations "eventsalsa.dev/projector/migrations"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 const infraSchema = "infra"

@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 // NotifyDispatcher listens for PostgreSQL NOTIFY events and emits wakeup signals.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 func TestNotifyDispatcherReconcileSendsWakeupWhenPositionAdvances(t *testing.T) {

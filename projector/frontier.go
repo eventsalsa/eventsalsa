@@ -3,7 +3,7 @@ package projector
 import (
 	"time"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 var timeNow = time.Now

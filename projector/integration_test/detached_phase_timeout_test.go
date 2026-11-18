@@ -11,9 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	storepostgres "github.com/eventsalsa/store/postgres"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
+	projectorpkg "eventsalsa.dev/projector"
 )
 
 // This file covers the phase budgets of a detached projection: the frontier

@@ -12,10 +12,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
+	projectorpkg "eventsalsa.dev/projector"
 )
 
 // gatedDetachedProjection is a DetachedProjection whose handler can be blocked

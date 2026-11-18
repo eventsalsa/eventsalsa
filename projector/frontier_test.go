@@ -3,7 +3,7 @@ package projector
 import (
 	"testing"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 func TestComputeSafeHarbor(t *testing.T) {

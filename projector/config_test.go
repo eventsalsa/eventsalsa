@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 
-	"github.com/eventsalsa/projector/postgres"
+	"eventsalsa.dev/projector/postgres"
 )
 
 func TestDefaultConfig(t *testing.T) {

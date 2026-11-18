@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 // PollDispatcher checks the latest global position on a fixed interval and emits

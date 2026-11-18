@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"eventsalsa.dev/store"
 )
 
 func newDetachedTestDaemon(t *testing.T, state *stubDBState, storeStub *stubProjectorStore) *Daemon {

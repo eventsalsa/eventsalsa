@@ -13,10 +13,10 @@ import (
 
 	"github.com/google/uuid"
 
-	storepostgres "github.com/eventsalsa/store/postgres"
+	storepostgres "eventsalsa.dev/store/postgres"
 
-	projectorpkg "github.com/eventsalsa/projector"
-	projectorpostgres "github.com/eventsalsa/projector/postgres"
+	projectorpkg "eventsalsa.dev/projector"
+	projectorpostgres "eventsalsa.dev/projector/postgres"
 )
 
 func TestProjector_SingleProjectorMultipleProjections(t *testing.T) {

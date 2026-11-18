@@ -8,15 +8,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/eventsalsa/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/projector/dispatcher"
-	"github.com/eventsalsa/projector/failure"
-	"github.com/eventsalsa/projector/postgres"
+	"eventsalsa.dev/store"
+
+	"eventsalsa.dev/projector/dispatcher"
+	"eventsalsa.dev/projector/failure"
+	"eventsalsa.dev/projector/postgres"
 )
 
 const (
