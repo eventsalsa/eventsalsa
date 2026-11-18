@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/envelope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/envelope"
 )
 
 const defaultRewrapBatchSize = 100
@@ -71,9 +72,9 @@ func RewrapKeys(ctx context.Context, pool *pgxpool.Pool, cfg Config, env *envelo
 	fqtn := fmt.Sprintf("%s.%s", cfg.Schema, cfg.Table)
 
 	if opts.DryRun {
-		remaining, err := countRowsByKEK(ctx, pool, fqtn, opts.FromKEKID)
-		if err != nil {
-			return RewrapKeysResult{}, fmt.Errorf("postgres rewrap: count dry-run rows: %w", err)
+		remaining, countErr := countRowsByKEK(ctx, pool, fqtn, opts.FromKEKID)
+		if countErr != nil {
+			return RewrapKeysResult{}, fmt.Errorf("postgres rewrap: count dry-run rows: %w", countErr)
 		}
 		return RewrapKeysResult{
 			MatchedRows:   remaining,
@@ -83,9 +84,9 @@ func RewrapKeys(ctx context.Context, pool *pgxpool.Pool, cfg Config, env *envelo
 
 	var result RewrapKeysResult
 	for {
-		batch, err := rewrapKeyBatch(ctx, pool, fqtn, env, opts)
-		if err != nil {
-			return RewrapKeysResult{}, err
+		batch, batchErr := rewrapKeyBatch(ctx, pool, fqtn, env, opts)
+		if batchErr != nil {
+			return RewrapKeysResult{}, batchErr
 		}
 		if batch.MatchedRows == 0 {
 			break

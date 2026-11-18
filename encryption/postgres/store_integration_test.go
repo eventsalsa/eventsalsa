@@ -12,15 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/local"
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/encryption/postgres/migrations"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/local"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres/migrations"
 
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eventsalsa/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres"
 )
 
 func TestSQLDefaultConfigMatchesEmbeddedMigration(t *testing.T) {

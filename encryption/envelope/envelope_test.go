@@ -7,10 +7,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 func setupTestEnvelope(t *testing.T) (env *envelope.Envelope, kekID string) {

@@ -1,5 +1,7 @@
 # Changelog
 
+> **Monorepo Cutover (`v0.1.0`+):** After `v0.0.6`, `encryption` moved from `github.com/eventsalsa/encryption` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/encryption` (with `kek/awskms` and `kek/gcpkms` tagged starting at `v0.0.1`). Historical entries below are preserved from the original repository.
+
 ## [0.0.6](https://github.com/eventsalsa/encryption/compare/v0.0.5...v0.0.6) (2026-10-15)
 
 

@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/kek/local"
-	"github.com/eventsalsa/encryption/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/kek/local"
+	"eventsalsa.dev/encryption/postgres"
 )
 
 func TestRewrapKeys_ValidatesOptions(t *testing.T) {

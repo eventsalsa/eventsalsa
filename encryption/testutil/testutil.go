@@ -4,8 +4,8 @@ package testutil
 import (
 	"crypto/rand"
 
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 // NewTestKeyring creates an in-memory kek.Keyring with a random 32-byte test key.

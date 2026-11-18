@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher"
-	"github.com/eventsalsa/encryption/kek"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher"
+	"eventsalsa.dev/encryption/kek"
 )
 
 // Envelope coordinates DEK generation, KEK-based wrapping/unwrapping/rewrapping
@@ -57,8 +57,8 @@ func (e *Envelope) GenerateDEK() ([]byte, error) {
 // WrapDEK encrypts a raw plaintext DEK using the keyring's active KEK,
 // cryptographically binding it to scope.AAD().
 func (e *Envelope) WrapDEK(ctx context.Context, scope encryption.KeyScope, dek []byte) (kekID string, encryptedDEK []byte, err error) {
-	if err := scope.Validate(); err != nil {
-		return "", nil, fmt.Errorf("envelope wrap DEK: %w", err)
+	if validateErr := scope.Validate(); validateErr != nil {
+		return "", nil, fmt.Errorf("envelope wrap DEK: %w", validateErr)
 	}
 	if len(dek) != e.cipher.KeySize() {
 		return "", nil, fmt.Errorf("envelope wrap DEK: got %d-byte DEK, want %d: %w", len(dek), e.cipher.KeySize(), encryption.ErrInvalidKeySize)

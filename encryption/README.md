@@ -41,18 +41,18 @@ KMS-native envelope encryption for Go systems — supporting **AWS KMS**, **Goog
 
 | Package | Module | Role |
 | :--- | :--- | :--- |
-| `encryption` (root) | `github.com/eventsalsa/encryption` | Sentinel errors, `EncryptedKey`, `KeyScope` (canonical AAD), and `ZeroBytes` |
-| `cipher` | `github.com/eventsalsa/encryption` | `Cipher` AEAD interface (`Encrypt`/`Decrypt` with `aad []byte`) |
-| `cipher/aesgcm` | `github.com/eventsalsa/encryption` | AES-256-GCM AEAD implementation |
-| `kek` | `github.com/eventsalsa/encryption` | `Wrapper`, `Rewrapper`, `Keyring`, and `CachingKeyring` |
-| `kek/local` | `github.com/eventsalsa/encryption` | In-process AES-256-GCM KEK wrapper + map and file loaders |
-| `kek/awskms` | `github.com/eventsalsa/encryption/kek/awskms` | AWS KMS `Wrapper` & native server-side `Rewrapper` (`ReEncrypt`) |
-| `kek/gcpkms` | `github.com/eventsalsa/encryption/kek/gcpkms` | Google Cloud KMS `Wrapper` with end-to-end CRC32C verification |
-| `envelope` | `github.com/eventsalsa/encryption` | `Envelope` and `Session` for DEK lifecycle and payload encryption |
-| `postgres` | `github.com/eventsalsa/encryption` | Stateless PostgreSQL `Store` and batch `RewrapKeys` |
-| `postgres/migrations` | `github.com/eventsalsa/encryption` | Embedded PostgreSQL migration SQL and generator |
-| `hash` | `github.com/eventsalsa/encryption` | `Hasher` interface + HMAC-SHA256 blind indexing |
-| `testutil` | `github.com/eventsalsa/encryption` | Test helpers (`NewTestKeyring()`) |
+| `encryption` (root) | `eventsalsa.dev/encryption` | Sentinel errors, `EncryptedKey`, `KeyScope` (canonical AAD), and `ZeroBytes` |
+| `cipher` | `eventsalsa.dev/encryption` | `Cipher` AEAD interface (`Encrypt`/`Decrypt` with `aad []byte`) |
+| `cipher/aesgcm` | `eventsalsa.dev/encryption` | AES-256-GCM AEAD implementation |
+| `kek` | `eventsalsa.dev/encryption` | `Wrapper`, `Rewrapper`, `Keyring`, and `CachingKeyring` |
+| `kek/local` | `eventsalsa.dev/encryption` | In-process AES-256-GCM KEK wrapper + map and file loaders |
+| `kek/awskms` | `eventsalsa.dev/encryption/kek/awskms` | AWS KMS `Wrapper` & native server-side `Rewrapper` (`ReEncrypt`) |
+| `kek/gcpkms` | `eventsalsa.dev/encryption/kek/gcpkms` | Google Cloud KMS `Wrapper` with end-to-end CRC32C verification |
+| `envelope` | `eventsalsa.dev/encryption` | `Envelope` and `Session` for DEK lifecycle and payload encryption |
+| `postgres` | `eventsalsa.dev/encryption` | Stateless PostgreSQL `Store` and batch `RewrapKeys` |
+| `postgres/migrations` | `eventsalsa.dev/encryption` | Embedded PostgreSQL migration SQL and generator |
+| `hash` | `eventsalsa.dev/encryption` | `Hasher` interface + HMAC-SHA256 blind indexing |
+| `testutil` | `eventsalsa.dev/encryption` | Test helpers (`NewTestKeyring()`) |
 
 ---
 
@@ -61,19 +61,19 @@ KMS-native envelope encryption for Go systems — supporting **AWS KMS**, **Goog
 ### 1. Generate Database Migration
 
 ```bash
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/encryption/cmd/migrate-gen -output migrations
 # Or print directly to stdout:
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -stdout
+go run eventsalsa.dev/encryption/cmd/migrate-gen -stdout
 ```
 
 ### 2. Configure a KEK Keyring (AWS KMS, GCP KMS, or Local)
 
 ```go
-// Option A: AWS KMS (github.com/eventsalsa/encryption/kek/awskms)
+// Option A: AWS KMS (eventsalsa.dev/encryption/kek/awskms)
 awsWrapper, err := awskms.NewWrapper(kmsClient, "arn:aws:kms:eu-west-1:123456789012:key/mrk-1234")
 keyring, err := kek.NewKeyring(awsWrapper.ID(), awsWrapper)
 
-// Option B: Google Cloud KMS (github.com/eventsalsa/encryption/kek/gcpkms)
+// Option B: Google Cloud KMS (eventsalsa.dev/encryption/kek/gcpkms)
 gcpWrapper, err := gcpkms.NewWrapper(gcpClient, "projects/my-proj/locations/global/keyRings/kr/cryptoKeys/kek-1")
 keyring, err := kek.NewKeyring(gcpWrapper.ID(), gcpWrapper)
 

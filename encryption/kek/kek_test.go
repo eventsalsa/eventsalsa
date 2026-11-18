@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 type nativeRewrapWrapper struct {
@@ -71,8 +71,14 @@ func TestKeyringWrapUnwrapAndRewrapFallback(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	w1, _ := local.NewWrapper("k1", makeRawKey(10))
-	w2, _ := local.NewWrapper("k2", makeRawKey(20))
+	w1, err := local.NewWrapper("k1", makeRawKey(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2, err := local.NewWrapper("k2", makeRawKey(20))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	kr, err := kek.NewKeyring("k1", w1, w2)
 	if err != nil {
@@ -121,8 +127,14 @@ func TestKeyringNativeRewrapperAndUnsupportedFallback(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	base1, _ := local.NewWrapper("k1", makeRawKey(1))
-	base2, _ := local.NewWrapper("k2", makeRawKey(2))
+	base1, err := local.NewWrapper("k1", makeRawKey(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base2, err := local.NewWrapper("k2", makeRawKey(2))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	nativeCount := 0
 	native1 := &nativeRewrapWrapper{

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher"
 )
 
 // Session holds an unwrapped DEK in memory for performing multiple local AEAD
@@ -15,9 +15,9 @@ import (
 // A Session is safe for concurrent use and must be closed via Close when the
 // unit of work finishes to scrub the plaintext DEK from memory.
 type Session struct {
-	mu     sync.RWMutex
-	dek    []byte
 	cipher cipher.Cipher
+	dek    []byte
+	mu     sync.RWMutex
 	closed bool
 }
 

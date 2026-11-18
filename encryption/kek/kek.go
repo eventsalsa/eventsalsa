@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/eventsalsa/encryption"
+	"eventsalsa.dev/encryption"
 )
 
 // Wrapper encrypts and decrypts Data Encryption Keys (DEKs) using a single KEK.

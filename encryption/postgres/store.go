@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/envelope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/envelope"
 )
 
 // pgxConn represents any pgx database executor (*pgxpool.Pool, pgx.Tx, *pgx.Conn).

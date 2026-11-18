@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/encryption"
+	"eventsalsa.dev/encryption"
 )
 
 type countingKeyring struct {
@@ -141,29 +141,45 @@ func TestCachingKeyringLRUEvictionAndClose(t *testing.T) {
 	dek3 := []byte("33333333333333333333333333333333")
 	aad := []byte("aad")
 
-	_, enc1, _ := cache.Wrap(ctx, dek1, aad)
-	_, enc2, _ := cache.Wrap(ctx, dek2, aad)
+	_, enc1, err := cache.Wrap(ctx, dek1, aad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, enc2, err := cache.Wrap(ctx, dek2, aad)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Touch enc1 so enc2 becomes the least-recently-used.
-	_, _ = cache.Unwrap(ctx, "k1", enc1, aad)
+	if _, err := cache.Unwrap(ctx, "k1", enc1, aad); err != nil {
+		t.Fatal(err)
+	}
 
 	// Wrapping dek3 evicts enc2.
-	_, _, _ = cache.Wrap(ctx, dek3, aad)
+	if _, _, err := cache.Wrap(ctx, dek3, aad); err != nil {
+		t.Fatal(err)
+	}
 
 	// enc1 should still be cached (0 inner unwraps).
-	_, _ = cache.Unwrap(ctx, "k1", enc1, aad)
+	if _, err := cache.Unwrap(ctx, "k1", enc1, aad); err != nil {
+		t.Fatal(err)
+	}
 	if inner.unwrapCalls.Load() != 0 {
 		t.Fatalf("enc1 should be a cache hit, got %d inner unwraps", inner.unwrapCalls.Load())
 	}
 
 	// enc2 was evicted (triggers 1 inner unwrap).
-	_, _ = cache.Unwrap(ctx, "k1", enc2, aad)
+	if _, err := cache.Unwrap(ctx, "k1", enc2, aad); err != nil {
+		t.Fatal(err)
+	}
 	if inner.unwrapCalls.Load() != 1 {
 		t.Fatalf("enc2 should be a cache miss, got %d inner unwraps", inner.unwrapCalls.Load())
 	}
 
 	cache.Invalidate()
-	_, _ = cache.Unwrap(ctx, "k1", enc1, aad)
+	if _, err := cache.Unwrap(ctx, "k1", enc1, aad); err != nil {
+		t.Fatal(err)
+	}
 	if inner.unwrapCalls.Load() != 2 {
 		t.Fatalf("after Invalidate, enc1 should miss, got %d inner unwraps", inner.unwrapCalls.Load())
 	}

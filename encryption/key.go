@@ -47,13 +47,13 @@ func (s KeyScope) AAD() []byte {
 
 // EncryptedKey represents a wrapped DEK and its lifecycle metadata.
 type EncryptedKey struct {
+	RevokedAt    *time.Time
+	CreatedAt    time.Time
 	Scope        string
 	ScopeID      string
-	KeyVersion   int
-	EncryptedDEK []byte
 	KEKID        string
-	CreatedAt    time.Time
-	RevokedAt    *time.Time
+	EncryptedDEK []byte
+	KeyVersion   int
 }
 
 // KeyScope returns the key's identifying scope tuple.

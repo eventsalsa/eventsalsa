@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/eventsalsa/encryption"
+	"eventsalsa.dev/encryption"
 )
 
 // CacheConfig configures a CachingKeyring.
@@ -25,9 +25,9 @@ type CacheConfig struct {
 }
 
 type cacheEntry struct {
-	key       [32]byte
-	dek       []byte
 	expiresAt time.Time
+	dek       []byte
+	key       [32]byte
 }
 
 // CachingKeyring decorates a Keyring with a bounded, TTL-expiring LRU cache of
@@ -37,14 +37,13 @@ type cacheEntry struct {
 // encryption.ZeroBytes upon TTL expiration, LRU eviction, Invalidate, or Close.
 type CachingKeyring struct {
 	inner      Keyring
+	now        func() time.Time
+	items      map[[32]byte]*list.Element
+	order      *list.List
+	mu         sync.Mutex
 	ttl        time.Duration
 	maxEntries int
-	now        func() time.Time
-
-	mu     sync.Mutex
-	items  map[[32]byte]*list.Element
-	order  *list.List
-	closed bool
+	closed     bool
 }
 
 // NewCachingKeyring wraps inner with an in-memory LRU DEK cache.
@@ -162,7 +161,10 @@ func (c *CachingKeyring) get(key [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry := elem.Value.(*cacheEntry)
+	entry, ok := elem.Value.(*cacheEntry)
+	if !ok {
+		return nil, false
+	}
 	if !c.now().Before(entry.expiresAt) {
 		c.removeElementLocked(elem)
 		return nil, false
@@ -185,7 +187,10 @@ func (c *CachingKeyring) put(key [32]byte, dek []byte) {
 	now := c.now()
 
 	if elem, ok := c.items[key]; ok {
-		entry := elem.Value.(*cacheEntry)
+		entry, ok := elem.Value.(*cacheEntry)
+		if !ok {
+			return
+		}
 		encryption.ZeroBytes(entry.dek)
 		entry.dek = make([]byte, len(dek))
 		copy(entry.dek, dek)
@@ -217,7 +222,10 @@ func (c *CachingKeyring) put(key [32]byte, dek []byte) {
 
 func (c *CachingKeyring) removeElementLocked(elem *list.Element) {
 	c.order.Remove(elem)
-	entry := elem.Value.(*cacheEntry)
+	entry, ok := elem.Value.(*cacheEntry)
+	if !ok {
+		return
+	}
 	encryption.ZeroBytes(entry.dek)
 	entry.dek = nil
 	delete(c.items, entry.key)

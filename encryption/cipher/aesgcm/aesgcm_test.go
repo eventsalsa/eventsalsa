@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eventsalsa/encryption"
+	"eventsalsa.dev/encryption"
 )
 
 func validKey(t *testing.T) []byte {
@@ -180,8 +180,14 @@ func TestUniqueNonces(t *testing.T) {
 	key := validKey(t)
 	plaintext := []byte("same plaintext")
 
-	ct1, _ := c.Encrypt(key, plaintext, nil)
-	ct2, _ := c.Encrypt(key, plaintext, nil)
+	ct1, err := c.Encrypt(key, plaintext, nil)
+	if err != nil {
+		t.Fatalf("Encrypt ct1: %v", err)
+	}
+	ct2, err := c.Encrypt(key, plaintext, nil)
+	if err != nil {
+		t.Fatalf("Encrypt ct2: %v", err)
+	}
 
 	// Nonces are the first 12 bytes — they must differ
 	if bytes.Equal(ct1[:12], ct2[:12]) {

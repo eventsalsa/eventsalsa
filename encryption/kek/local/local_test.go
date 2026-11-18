@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 func writeKeyFile(t *testing.T, dir, name string, content []byte) string {

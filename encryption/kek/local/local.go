@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/kek"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/kek"
 )
 
 // Option configures a local Wrapper.
@@ -33,9 +33,8 @@ func WithCipher(c cipher.Cipher) Option {
 type Wrapper struct {
 	id     string
 	cipher cipher.Cipher
-
-	mu     sync.RWMutex
 	key    []byte
+	mu     sync.RWMutex
 	closed bool
 }
 

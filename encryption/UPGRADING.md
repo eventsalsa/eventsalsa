@@ -2,7 +2,7 @@
 
 ## Upgrading from `v0.0.5` to `v0.0.6`
 
-`v0.0.6` redesigns `github.com/eventsalsa/encryption` for KMS-native Key Encryption Key (KEK) providers (`kek/local`, `kek/awskms`, `kek/gcpkms`), introduces mandatory Additional Authenticated Data (AAD) scope binding on wrapped Data Encryption Keys (DEKs), and refines the PostgreSQL keystore schema.
+`v0.0.6` redesigns `eventsalsa.dev/encryption` for KMS-native Key Encryption Key (KEK) providers (`kek/local`, `kek/awskms`, `kek/gcpkms`), introduces mandatory Additional Authenticated Data (AAD) scope binding on wrapped Data Encryption Keys (DEKs), and refines the PostgreSQL keystore schema.
 
 Because the library is still in the pre-`0.1.0` (`0.0.*`) series, the maintainers chose to update the initial database migration ([`postgres/migrations/001_encryption_keys.sql`](postgres/migrations/001_encryption_keys.sql)) in place rather than accumulating a second incremental migration file. If you have an existing `v0.0.5` deployment, follow the steps below to migrate your schema, re-bind existing DEKs with scope AAD, and update your Go code.
 
@@ -83,9 +83,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/local"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

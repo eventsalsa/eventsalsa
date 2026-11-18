@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/eventsalsa/encryption"
+	"eventsalsa.dev/encryption"
 )
 
 const (

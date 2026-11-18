@@ -2,11 +2,11 @@
 //
 // Usage:
 //
-//	go run github.com/eventsalsa/encryption/cmd/migrate-gen -output migrations
+//	go run eventsalsa.dev/encryption/cmd/migrate-gen -output migrations
 //
 // Or print the SQL directly:
 //
-//	go run github.com/eventsalsa/encryption/cmd/migrate-gen -stdout
+//	go run eventsalsa.dev/encryption/cmd/migrate-gen -stdout
 package main
 
 import (
@@ -15,8 +15,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/encryption/postgres/migrations"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres/migrations"
 )
 
 func main() {

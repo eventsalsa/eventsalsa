@@ -1,9 +1,10 @@
-.PHONY: build check fmt golangci govulncheck gosec lint test test-integration vet
+.PHONY: build check fmt fmt-check golangci govulncheck gosec lint test test-integration vet
 
 SUBMODULES := kek/awskms kek/gcpkms examples
+ROOT_CONFIG := $(abspath $(CURDIR)/../.golangci.yml)
 
 ## Run the full local check suite mirrored by CI and the security workflow.
-check: fmt vet golangci test build test-integration gosec govulncheck
+check: fmt-check vet golangci test build test-integration gosec govulncheck
 
 ## Run go vet across root module and sub-modules
 vet:
@@ -14,9 +15,9 @@ vet:
 
 ## Run golangci-lint across root module and sub-modules
 golangci:
-	golangci-lint run --timeout=5m
+	golangci-lint run --config="$(ROOT_CONFIG)" --timeout=5m ./...
 	@for mod in $(SUBMODULES); do \
-		(cd "$$mod" && golangci-lint run --config=$(CURDIR)/.golangci.yml --timeout=5m); \
+		(cd "$$mod" && golangci-lint run --config="$(ROOT_CONFIG)" --timeout=5m ./...); \
 	done
 
 ## Run all tests with race detector and coverage across root module and sub-modules
@@ -30,7 +31,7 @@ test:
 
 ## Run integration-tagged tests (requires Docker when Postgres integration tests are present)
 test-integration:
-	go test -race -count=1 -tags=integration ./...
+	go test -p 1 -race -count=1 -tags=integration ./...
 
 ## Build all packages across root module and sub-modules
 build:
@@ -39,21 +40,26 @@ build:
 		go build -C "$$mod" ./...; \
 	done
 
-## Check formatting (fails if files need formatting)
+## Format code across root module and sub-modules
 fmt:
-	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run gofmt to fix"; exit 1; }
+	gofmt -w -s .
+	goimports -w -local eventsalsa.dev .
+
+## Check formatting (fails if files need formatting)
+fmt-check:
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run make fmt to fix"; exit 1; }
 
 ## Run formatting, vet, and golangci-lint
-lint: fmt vet golangci
+lint: fmt-check vet golangci
 
-## Run gosec with a temporary SARIF output file across root module and sub-modules
+## Run gosec across root module and sub-modules
 gosec:
 	tmp=$$(mktemp --suffix=.sarif); \
-	trap 'rm -f "$$tmp"' EXIT; \
-	gosec -no-fail -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples -fmt sarif -out "$$tmp" ./...
+	gosec -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
+	rm -f "$$tmp"
 	@for mod in $(SUBMODULES); do \
 		tmp=$$(mktemp --suffix=.sarif); \
-		(cd "$$mod" && gosec -no-fail -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
+		(cd "$$mod" && gosec -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \
 	done
 
