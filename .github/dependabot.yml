@@ -1,0 +1,112 @@
+version: 2
+updates:
+  # GitHub Actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"
+
+  # Go module updates (one grouped PR per module directory)
+  - package-ecosystem: "gomod"
+    directory: "/store"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      store-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/snapshot"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      snapshot-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/projector"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      projector-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/encryption"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      encryption-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/encryption/kek/awskms"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      encryption-awskms-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/encryption/kek/gcpkms"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      encryption-gcpkms-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/encryption/examples"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      encryption-examples-dependencies:
+        patterns:
+          - "*"
+
+  # Astro documentation site npm updates (grouped into a single PR)
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(deps)"
+    groups:
+      docs-npm-dependencies:
+        patterns:
+          - "*"

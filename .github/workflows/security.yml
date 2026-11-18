@@ -1,0 +1,122 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 06:00 UTC
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  gosec:
+    name: gosec (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - name: store
+            dir: store
+            args: ""
+          - name: snapshot
+            dir: snapshot
+            args: ""
+          - name: projector
+            dir: projector
+            args: ""
+          - name: encryption
+            dir: encryption
+            args: -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples
+          - name: encryption-kek-awskms
+            dir: encryption/kek/awskms
+            args: ""
+          - name: encryption-kek-gcpkms
+            dir: encryption/kek/gcpkms
+            args: ""
+          - name: encryption-examples
+            dir: encryption/examples
+            args: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        id: run_gosec
+        continue-on-error: true
+        working-directory: ${{ matrix.module.dir }}
+        run: gosec ${{ matrix.module.args }} -fmt sarif -out gosec-results.sarif ./...
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ matrix.module.dir }}/gosec-results.sarif
+          category: gosec-${{ matrix.module.name }}
+
+      - name: Enforce gosec status
+        if: ${{ steps.run_gosec.outcome == 'failure' }}
+        run: exit 1
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: |
+          for mod in store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples; do
+            echo "==> govulncheck ($mod)"
+            govulncheck -C "$mod" ./...
+          done
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: go
+
+      - name: Build all modules
+        run: |
+          for mod in store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples; do
+            go build -C "$mod" ./...
+          done
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4

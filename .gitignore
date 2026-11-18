@@ -1,0 +1,38 @@
+# Binaries & build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+/bin/
+/dist/
+
+# Coverage & security reports
+*.out
+*.prof
+coverage.out
+gosec-results.sarif
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go workspace sum (keep go.work committed)
+go.work.sum
+
+# Node / Astro (docs/)
+docs/node_modules/
+docs/dist/
+docs/.astro/
+docs/*.zip
+docs/stitch/
+.env
+.env.*

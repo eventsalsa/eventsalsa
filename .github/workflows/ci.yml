@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  changes:
+    name: Detect Changed Modules
+    runs-on: ubuntu-latest
+    outputs:
+      root: ${{ steps.filter.outputs.root }}
+      store: ${{ steps.filter.outputs.store }}
+      snapshot: ${{ steps.filter.outputs.snapshot }}
+      projector: ${{ steps.filter.outputs.projector }}
+      encryption: ${{ steps.filter.outputs.encryption }}
+      encryption_awskms: ${{ steps.filter.outputs.encryption_awskms }}
+      encryption_gcpkms: ${{ steps.filter.outputs.encryption_gcpkms }}
+      encryption_examples: ${{ steps.filter.outputs.encryption_examples }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            root:
+              - '.golangci.yml'
+              - 'go.work'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            store:
+              - 'store/**'
+            snapshot:
+              - 'snapshot/**'
+              - 'store/**'
+            projector:
+              - 'projector/**'
+              - 'store/**'
+            encryption:
+              - 'encryption/**'
+            encryption_awskms:
+              - 'encryption/**'
+            encryption_gcpkms:
+              - 'encryption/**'
+            encryption_examples:
+              - 'encryption/**'
+            docs:
+              - 'docs/**'
+
+  go-module:
+    name: Go (${{ matrix.module.dir }})
+    needs: changes
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.root == 'true' ||
+      needs.changes.outputs[matrix.module.key] == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - key: store
+            dir: store
+            integration: true
+            published: true
+          - key: snapshot
+            dir: snapshot
+            integration: true
+            published: true
+          - key: projector
+            dir: projector
+            integration: true
+            published: true
+          - key: encryption
+            dir: encryption
+            integration: true
+            published: true
+          - key: encryption_awskms
+            dir: encryption/kek/awskms
+            integration: false
+            published: true
+          - key: encryption_gcpkms
+            dir: encryption/kek/gcpkms
+            integration: false
+            published: true
+          - key: encryption_examples
+            dir: encryption/examples
+            integration: false
+            published: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: |
+            ${{ matrix.module.dir }}/go.sum
+
+      - name: Check formatting
+        working-directory: ${{ matrix.module.dir }}
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: ${{ matrix.module.dir }}
+        run: go vet ./...
+
+      - name: Build
+        working-directory: ${{ matrix.module.dir }}
+        run: go build ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: latest
+          working-directory: ${{ matrix.module.dir }}
+          args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
+
+      - name: Unit tests
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.module.key }}
+          path: ${{ matrix.module.dir }}/coverage.out
+          retention-days: 7
+
+      - name: Integration tests
+        if: ${{ matrix.module.integration }}
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -p 1 -v -race -count=1 -tags=integration -timeout=300s ./...
+
+      - name: Standalone module verification (Release PRs)
+        if: >-
+          github.event_name == 'pull_request' &&
+          startsWith(github.head_ref, 'release-please--') &&
+          matrix.module.published
+        working-directory: ${{ matrix.module.dir }}
+        env:
+          GOWORK: "off"
+        run: |
+          go mod verify
+          go build ./...
+          go test -race -count=1 ./...
+
+  docs:
+    name: Docs (Astro)
+    needs: changes
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.root == 'true' ||
+      needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check Cloudflare middleware
+        run: ./node_modules/.bin/tsc --noEmit --skipLibCheck --strict --target es2022 --module esnext --lib es2022,dom functions/_middleware.ts
+
+      - name: Build site
+        run: npm run build
