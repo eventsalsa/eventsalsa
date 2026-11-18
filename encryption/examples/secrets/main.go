@@ -20,15 +20,16 @@ import (
 	"os"
 	"time"
 
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/encryption/postgres/migrations"
-	"github.com/eventsalsa/encryption/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres/migrations"
+	"eventsalsa.dev/encryption/testutil"
 )
 
 func main() {
@@ -123,7 +124,7 @@ func connectPostgres(ctx context.Context) (*pgxpool.Pool, func(), error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("start postgres container: %w", err)
 		}
-		cleanup = func() { _ = ctr.Terminate(ctx) }
+		cleanup = func() { _ = ctr.Terminate(ctx) } //nolint:errcheck // best-effort container cleanup
 
 		connStr, err = ctr.ConnectionString(ctx, "sslmode=disable")
 		if err != nil {

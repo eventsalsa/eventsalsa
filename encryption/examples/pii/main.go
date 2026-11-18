@@ -17,16 +17,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/encryption/postgres/migrations"
-	"github.com/eventsalsa/encryption/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres/migrations"
+	"eventsalsa.dev/encryption/testutil"
 )
 
 func main() {
@@ -60,7 +61,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort example cleanup
 
 	key, err := store.CreateKey(ctx, tx, scope, userID)
 	if err != nil {
@@ -76,8 +77,8 @@ func run() error {
 	}
 	fmt.Printf("2. Encrypted PII payload: %s\n", ciphertext)
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return fmt.Errorf("commit tx: %w", commitErr)
 	}
 
 	// 5. Read / Decrypt event payload
@@ -92,8 +93,8 @@ func run() error {
 	fmt.Printf("3. Decrypted PII payload: %s\n", decrypted)
 
 	// 6. GDPR Article 17 Erasure Request: Crypto-Shred the DEK
-	if err := store.DestroyKeys(ctx, pool, scope, userID); err != nil {
-		return fmt.Errorf("destroy keys: %w", err)
+	if destroyErr := store.DestroyKeys(ctx, pool, scope, userID); destroyErr != nil {
+		return fmt.Errorf("destroy keys: %w", destroyErr)
 	}
 	fmt.Printf("4. Hard-deleted encryption keys for %s:%s\n", scope, userID)
 
@@ -124,7 +125,7 @@ func connectPostgres(ctx context.Context) (*pgxpool.Pool, func(), error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("start postgres container: %w", err)
 		}
-		cleanup = func() { _ = ctr.Terminate(ctx) }
+		cleanup = func() { _ = ctr.Terminate(ctx) } //nolint:errcheck // best-effort container cleanup
 
 		connStr, err = ctr.ConnectionString(ctx, "sslmode=disable")
 		if err != nil {

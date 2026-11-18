@@ -1,11 +1,11 @@
-module github.com/eventsalsa/encryption/examples
+module eventsalsa.dev/encryption/examples
 
-go 1.26.0
+go 1.27.4
 
-replace github.com/eventsalsa/encryption => ../
+replace eventsalsa.dev/encryption => ../
 
 require (
-	github.com/eventsalsa/encryption v0.0.0-00010101000000-000000000000
+	eventsalsa.dev/encryption v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0

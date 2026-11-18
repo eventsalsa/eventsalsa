@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/testutil"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/testutil"
 )
 
 func main() {
