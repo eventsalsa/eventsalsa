@@ -1,0 +1,78 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+
+export function getStaticPaths() {
+	const packages = [
+		'store',
+		'store/cmd/eventmap-gen',
+		'store/cmd/migrate-gen',
+		'store/eventmap',
+		'store/examples',
+		'store/examples/basic',
+		'store/examples/eventmap-codegen',
+		'store/examples/eventmap-codegen/domain/user/events/v1',
+		'store/examples/eventmap-codegen/domain/user/events/v2',
+		'store/examples/eventmap-codegen/infrastructure/persistence',
+		'store/migrations',
+		'store/postgres',
+		'snapshot',
+		'snapshot/cmd/migrate-gen',
+		'snapshot/examples',
+		'snapshot/examples/basic',
+		'snapshot/migrations',
+		'snapshot/postgres',
+		'projector',
+		'projector/cmd/migrate-gen',
+		'projector/dispatcher',
+		'projector/examples',
+		'projector/examples/telemetry',
+		'projector/failure',
+		'projector/migrations',
+		'projector/postgres',
+		'encryption',
+		'encryption/cipher',
+		'encryption/cipher/aesgcm',
+		'encryption/cmd/migrate-gen',
+		'encryption/envelope',
+		'encryption/examples',
+		'encryption/examples/basic',
+		'encryption/examples/pii',
+		'encryption/examples/secrets',
+		'encryption/hash',
+		'encryption/kek',
+		'encryption/kek/awskms',
+		'encryption/kek/gcpkms',
+		'encryption/kek/local',
+		'encryption/postgres',
+		'encryption/postgres/migrations',
+		'encryption/testutil',
+	];
+
+	return packages.map((pkg) => ({
+		params: { gopkg: pkg },
+		props: { pkg },
+	}));
+}
+
+interface Props {
+	pkg: string;
+}
+
+const { pkg } = Astro.props;
+const importPath = `eventsalsa.dev/${pkg}`;
+const pkgDocHref = `https://pkg.go.dev/${importPath}`;
+const githubSourceHref = `https://github.com/eventsalsa/eventsalsa/tree/main/${pkg}`;
+const docsHomeHref = `${import.meta.env.BASE_URL}documentation/`;
+---
+
+<SiteLayout title={`${importPath} | eventsalsa`} description={`Go vanity import target for ${importPath}`}>
+	<main style="max-width: 44rem; margin: 5rem auto; padding: 0 1.5rem; font-family: system-ui, sans-serif;">
+		<h1><code>{importPath}</code></h1>
+		<p>This Go package is hosted in the consolidated eventsalsa monorepo on GitHub.</p>
+		<ul>
+			<li><a href={pkgDocHref}>Go package documentation ({importPath})</a></li>
+			<li><a href={githubSourceHref}>Source on GitHub</a></li>
+			<li><a href={docsHomeHref}>eventsalsa documentation</a></li>
+		</ul>
+	</main>
+</SiteLayout>

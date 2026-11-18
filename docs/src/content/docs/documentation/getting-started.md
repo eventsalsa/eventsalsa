@@ -86,7 +86,7 @@ For the rest of this guide, the running example is an `Order` aggregate. We will
 Start with the event store itself and a PostgreSQL driver:
 
 ```bash
-go get github.com/eventsalsa/store
+go get eventsalsa.dev/store
 go get github.com/jackc/pgx/v5
 ```
 
@@ -99,13 +99,13 @@ Before you can append events, you need the event store tables.
 `eventsalsa/store` ships a small CLI that writes the SQL migration file for you:
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/store/cmd/migrate-gen -output migrations
 ```
 
 That command writes a timestamped SQL file into `migrations/`. If you want a stable filename, you can set it explicitly:
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -filename 001_events.sql
 ```
@@ -124,7 +124,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store/postgres"
 )
 
 func openStore(ctx context.Context) (*pgxpool.Pool, *postgres.Store, error) {
@@ -187,7 +187,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 func buildOrderEvents(orderID string) ([]store.Event, error) {
@@ -300,7 +300,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 func createOrder(ctx context.Context, db *pgxpool.Pool, eventStore store.EventStore) error {
@@ -378,7 +378,7 @@ package main
 import (
 	"encoding/json"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 type Order struct {
@@ -464,7 +464,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 type OrderOverviewProjection struct{}

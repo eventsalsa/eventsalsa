@@ -5,7 +5,7 @@ import SiteLayout from '../layouts/SiteLayout.astro';
 const baseUrl = import.meta.env.BASE_URL;
 const documentationHref = `${baseUrl}documentation/`;
 const changelogHref = `${baseUrl}documentation/project/changelog/`;
-const githubHref = 'https://github.com/eventsalsa/store';
+const githubHref = 'https://github.com/eventsalsa/eventsalsa';
 
 const featureCards = [
 	{
@@ -78,8 +78,8 @@ const benefits = [
 const storeCodeLines = [
 	`<span class="token-keyword">import</span> (`,
 	`  <span class="token-string">"time"</span>`,
-	`  <span class="token-string">"github.com/eventsalsa/store"</span>`,
-	`  <span class="token-string">"github.com/eventsalsa/store/postgres"</span>`,
+	`  <span class="token-string">"eventsalsa.dev/store"</span>`,
+	`  <span class="token-string">"eventsalsa.dev/store/postgres"</span>`,
 	`  <span class="token-string">"github.com/google/uuid"</span>`,
 	`)`,
 	``,
@@ -234,7 +234,7 @@ const projectorCodeLines = [
 							<span>Install</span>
 							<span class="material-symbols-outlined">terminal</span>
 						</div>
-						<code>go get github.com/eventsalsa/store</code>
+						<code>go get eventsalsa.dev/store</code>
 					</div>
 					<ul class="proof-points">
 						<li>
@@ -291,7 +291,7 @@ const projectorCodeLines = [
 							<span>Install</span>
 							<span class="material-symbols-outlined">terminal</span>
 						</div>
-						<code>go get github.com/eventsalsa/projector</code>
+						<code>go get eventsalsa.dev/projector</code>
 					</div>
 					<ul class="proof-points">
 						<li>

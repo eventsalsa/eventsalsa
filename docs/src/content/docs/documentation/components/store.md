@@ -34,6 +34,7 @@ Before persistence, you work with `store.Event`. After persistence, the store re
 | `StreamID` | The identifier of one stream instance, for example an order ID. |
 | `StreamVersion` | The event's position inside that stream. The store assigns it during append. |
 | `GlobalPosition` | The event's position in the global log. The store assigns it during append. Useful for projections and global log readers. |
+| `TransactionID` | The PostgreSQL transaction identifier (`xid8` scanned as `uint64`) that persisted the event, useful for snapshot-aware / transaction-ordered global reads. |
 | `EventType` | The logical event name, for example `OrderPlaced`. |
 | `EventVersion` | The schema version of the payload for that event type. |
 | `Payload` | The serialized event body. In the examples below it is JSON, but the field itself is just `[]byte`. |
@@ -114,8 +115,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/postgres"
 	orderes "github.com/acme/shop/internal/infrastructure/order/persistence/generated"
 )
 
@@ -196,7 +197,7 @@ It also lets you switch on concrete Go types after decoding, which is usually ea
 If you want the generator available to the project, add it as a tool dependency:
 
 ```bash
-go get -tool github.com/eventsalsa/store/cmd/eventmap-gen
+go get -tool eventsalsa.dev/store/cmd/eventmap-gen
 ```
 
 That gives you a stable project-local way to run it with `go tool eventmap-gen`.
@@ -290,7 +291,7 @@ Even if your first release only has `v1`, the explicit directory makes the inten
 
 ## Configuring the store
 
-The PostgreSQL implementation lives in `github.com/eventsalsa/store/postgres`. Most applications can start with `postgres.DefaultStoreConfig()`, but the component also exposes a small set of configuration options when you need to tailor table names, notifications, or logging.
+The PostgreSQL implementation lives in `eventsalsa.dev/store/postgres`. Most applications can start with `postgres.DefaultStoreConfig()`, but the component also exposes a small set of configuration options when you need to tailor table names, notifications, or logging.
 
 ```go
 config := postgres.NewStoreConfig(
@@ -694,13 +695,13 @@ That is enough for append, read, and concurrency-conflict logs to show up in the
 The quickest way to create the store schema is `migrate-gen`:
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/store/cmd/migrate-gen -output migrations
 ```
 
 That command writes a PostgreSQL migration creating the `events` table and the `stream_heads` table. You can also set a stable file name:
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -filename 001_event_store.sql
 ```
@@ -708,7 +709,7 @@ go run github.com/eventsalsa/store/cmd/migrate-gen \
 If you want to customize table names from the CLI, flags are available:
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -events-table events \
   -stream-heads-table stream_heads
@@ -751,7 +752,7 @@ If you change the generated table names, change the store configuration too.
 Native partitioning creates a sequence and pre-allocates a configured number of partition child tables with zero-padded boundaries.
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy native \
   -partition-size 10000000 \
@@ -788,7 +789,7 @@ For automated partition creation without manual intervention, `eventsalsa/store`
 #### Option A: Automated Maintenance with `pg_cron`
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance pg_cron \
@@ -816,7 +817,7 @@ SELECT cron.schedule('partman-maintenance-events', '0 * * * *', $$CALL partman.r
 #### Option B: Automated Maintenance with Background Worker (`pg_partman_bgw`)
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance bgw
@@ -833,7 +834,7 @@ pg_partman_bgw.dbname = 'mydb'
 #### Option C: External / Manual Maintenance
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance none

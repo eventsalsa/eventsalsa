@@ -5,7 +5,19 @@ description: Released versions of the current eventsalsa components.
 
 This page summarizes released versions of the current `eventsalsa` components. It is intentionally component-oriented so the notes stay aligned with the published libraries rather than the docs site itself.
 
+> **Monorepo & Vanity Import Cutover:** Starting with `eventsalsa/store` v0.3.0, `eventsalsa/projector` v0.6.0, `eventsalsa/encryption` v0.1.0 (`kek/awskms` v0.0.1, `kek/gcpkms` v0.0.1), and `eventsalsa/snapshot` v0.0.2, all components are developed in `github.com/eventsalsa/eventsalsa` and published under `eventsalsa.dev/*` vanity Go module paths. Historical pre-cutover releases remain archived on their original `github.com/eventsalsa/*` repositories.
+
 ## eventsalsa/store
+
+### v0.3.0
+
+- **Breaking Changes**:
+  - Migrated Go module import path from `github.com/eventsalsa/store` to `eventsalsa.dev/store`.
+- **Features**:
+  - Added `transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id()` and `idx_<table>_transaction_position` across all PostgreSQL migration strategies (`none`, `native`, `partman`), and exposed `PersistedEvent.TransactionID` (`uint64`) on appends and reads.
+  - Exported `migrations.SQL(config *migrations.Config) (string, error)` for programmatic DDL generation and added `UPGRADING.md` with zero-downtime PostgreSQL upgrade instructions.
+- **Fixes**:
+  - Fixed schema-prefixed index generation (`ordering.events`) in `store/migrations` and added `CREATE SCHEMA IF NOT EXISTS` statements when schemas are specified.
 
 ### v0.2.0
 
@@ -42,6 +54,13 @@ This page summarizes released versions of the current `eventsalsa` components. I
 - Initial release.
 
 ## eventsalsa/projector
+
+### v0.6.0
+
+- **Breaking Changes**:
+  - Migrated Go module import paths to `eventsalsa.dev/projector` and `eventsalsa.dev/store` (`v0.3.0`).
+- **Improvements**:
+  - Upgraded `github.com/jackc/pgx/v5` and toolchain compatibility to Go 1.27.4.
 
 ### v0.5.0
 
@@ -105,6 +124,13 @@ This page summarizes released versions of the current `eventsalsa` components. I
 
 ## eventsalsa/encryption
 
+### v0.1.0
+
+- **Breaking Changes**:
+  - Migrated Go module import paths to `eventsalsa.dev/encryption`, `eventsalsa.dev/encryption/kek/awskms` (`v0.0.1`), and `eventsalsa.dev/encryption/kek/gcpkms` (`v0.0.1`).
+- **Improvements**:
+  - Updated toolchain compatibility to Go 1.27.4 and harmonized strict static analysis across the monorepo.
+
 ### v0.0.6
 
 - **Breaking Changes**:
@@ -145,3 +171,17 @@ This page summarizes released versions of the current `eventsalsa` components. I
 ### v0.0.1
 
 - Initial release.
+
+## eventsalsa/snapshot
+
+### v0.0.2
+
+- **Breaking Changes**:
+  - Migrated Go module import paths to `eventsalsa.dev/snapshot` and `eventsalsa.dev/store` (`v0.3.0`).
+- **Fixes**:
+  - Updated PostgreSQL integration and example schemas to generate store tables via `eventsalsa.dev/store/migrations.SQL` instead of hardcoded SQL DDL.
+  - Checked `gzip.Reader.Close()` errors on snapshot decompression and tightened migration directory permissions (`0o750`).
+
+### v0.0.1
+
+- Initial release (`github.com/eventsalsa/snapshot`).

@@ -1,26 +1,23 @@
 # eventsalsa docs
 
-Website and documentation scaffold for **eventsalsa**, an event sourcing bundle for Go.
+Website and documentation scaffold for **eventsalsa**, an event sourcing bundle for Go hosted at [`eventsalsa.dev`](https://eventsalsa.dev).
 
 ## Stack
 
 - **Astro** for the website surface
 - **Starlight** for documentation in Markdown/MDX
-- **GitHub Pages** for static deployment
+- **Cloudflare Pages** (with `functions/_middleware.ts` for zero-redirect `?go-get=1` vanity Go import resolution)
 
 ## Project structure
 
 ```text
 .
+├── functions/                  # Cloudflare Pages middleware (?go-get=1 Go vanity imports)
 ├── public/                     # Static assets
 ├── src/
 │   ├── content/docs/           # Starlight documentation content
 │   ├── layouts/                # Shared Astro layouts for the site
-│   └── pages/                  # Custom website pages
-├── .github/agents/             # Custom Copilot agents
-├── .github/instructions/       # Path-specific Copilot instructions
-├── .github/skills/             # Project Copilot skills
-└── .github/workflows/          # Pages + Copilot setup workflows
+│   └── pages/                  # Custom website pages & static [...gopkg].astro routes
 ```
 
 ## Commands

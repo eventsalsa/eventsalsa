@@ -5,11 +5,12 @@ description: Use this when writing or restructuring site copy, docs, navigation,
 
 Use this repository context when a task involves product framing, documentation, copy, or information architecture:
 
-- `eventsalsa` is an event sourcing bundle for Go.
+- `eventsalsa` is an event sourcing bundle for Go hosted in the consolidated monorepo at `https://github.com/eventsalsa/eventsalsa` and imported via `eventsalsa.dev/*`.
 - Current components:
-  - `eventsalsa/store`: append-only event store
-  - `eventsalsa/projector`: async projections and distributed daemon
-  - `eventsalsa/encryption`: envelope encryption for PII and secrets, crypto-shredding for GDPR compliance, and HMAC hashing for sensitive lookups
+  - `eventsalsa/store` (`eventsalsa.dev/store`): append-only event store
+  - `eventsalsa/snapshot` (`eventsalsa.dev/snapshot`): stream state snapshotting
+  - `eventsalsa/projector` (`eventsalsa.dev/projector`): async projections and distributed daemon
+  - `eventsalsa/encryption` (`eventsalsa.dev/encryption`): envelope encryption for PII and secrets, crypto-shredding for GDPR compliance, and HMAC hashing for sensitive lookups
 
 Important constraints:
 

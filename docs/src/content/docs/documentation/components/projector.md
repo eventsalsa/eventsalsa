@@ -21,10 +21,10 @@ At a practical level, the component covers:
 Add the module to your project:
 
 ```bash
-go get github.com/eventsalsa/projector
+go get eventsalsa.dev/projector
 ```
 
-In a typical deployment, the projector runs alongside `github.com/eventsalsa/store` and connects to the same PostgreSQL database. That means your database requires:
+In a typical deployment, the projector runs alongside `eventsalsa.dev/store` and connects to the same PostgreSQL database. That means your database requires:
 
 - the event-store tables from `eventsalsa/store` (`events`, `stream_heads`)
 - the projector infrastructure tables from `eventsalsa/projector`
@@ -34,7 +34,7 @@ In a typical deployment, the projector runs alongside `github.com/eventsalsa/sto
 The quickest way to scaffold the infrastructure tables is the `migrate-gen` CLI:
 
 ```bash
-go run github.com/eventsalsa/projector/cmd/migrate-gen \
+go run eventsalsa.dev/projector/cmd/migrate-gen \
   -output ./db/migrations \
   -filename 002_projector_tables.sql
 ```
@@ -44,7 +44,7 @@ That command generates a SQL migration containing the metadata tables required b
 If you need custom table names, the CLI provides dedicated flags:
 
 ```bash
-go run github.com/eventsalsa/projector/cmd/migrate-gen \
+go run eventsalsa.dev/projector/cmd/migrate-gen \
   -output ./db/migrations \
   -projector-instances-table infra.projector_instances \
   -projection-assignments-table infra.projection_assignments \
@@ -61,7 +61,7 @@ package main
 import (
 	"log"
 
-	"github.com/eventsalsa/projector/migrations"
+	"eventsalsa.dev/projector/migrations"
 )
 
 func main() {
@@ -95,7 +95,7 @@ These tables form the projector's control plane. They hold coordination state, o
 A minimal projector deployment needs three pieces:
 
 1. a database connection pool (`*pgxpool.Pool`)
-2. an event store reader implementation (`github.com/eventsalsa/store/postgres`)
+2. an event store reader implementation (`eventsalsa.dev/store/postgres`)
 3. a projection registry (`*projector.Registry`) containing one or more projections
 
 Here is a projection handler. Projections implement `Name()` and `Handle(...)`:
@@ -129,8 +129,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/projector"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/projector"
+	storepostgres "eventsalsa.dev/store/postgres"
 )
 
 func main() {
@@ -304,7 +304,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 type OrderLineAdded struct {
@@ -413,8 +413,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/eventsalsa/projector/failure"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/projector/failure"
+	"eventsalsa.dev/store"
 )
 
 type ProductUpserted struct {
@@ -516,8 +516,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/eventsalsa/projector/failure"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/projector/failure"
+	"eventsalsa.dev/store"
 )
 
 type SubscriptionTierChanged struct {
@@ -589,13 +589,13 @@ Not all projection failures should be treated the same way. A SQL syntax error i
 
 ### Classifying errors (`projector/failure`)
 
-Handlers can classify errors explicitly at the failure site using `github.com/eventsalsa/projector/failure`:
+Handlers can classify errors explicitly at the failure site using `eventsalsa.dev/projector/failure`:
 
 - **`failure.Retryable(err)`**: Marks `err` as a transient failure (network timeout, rate limit, HTTP 5xx). The daemon backs off exponentially up to `MaxPollInterval`, retries the batch, emits `OnProjectionDegraded`, and **never** treats the failure as fatal.
 - **`failure.Permanent(err)`**: Marks `err` as an unrecoverable failure that retrying cannot fix (malformed payload, schema violation). If a poison handler is registered, the batch is handed to the poison handler and skipped; otherwise, the daemon stops only that projection and keeps all other projections running.
 
 ```go
-import "github.com/eventsalsa/projector/failure"
+import "eventsalsa.dev/projector/failure"
 
 func (p *WebhookProjection) Handle(ctx context.Context, event store.PersistedEvent) error {
 	if err := p.deliver(ctx, event); err != nil {
@@ -698,7 +698,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/eventsalsa/projector"
+	"eventsalsa.dev/projector"
 )
 
 type PrometheusObserver struct {
@@ -886,7 +886,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/eventsalsa/projector"
+	"eventsalsa.dev/projector"
 )
 
 func main() {

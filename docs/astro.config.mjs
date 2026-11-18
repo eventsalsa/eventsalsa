@@ -2,15 +2,10 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-const owner = process.env.GITHUB_REPOSITORY_OWNER ?? 'eventsalsa';
-const repo = process.env.GITHUB_REPOSITORY?.split('/')[1];
-const isRootPagesRepo = repo === `${owner}.github.io`;
-const base = process.env.GITHUB_PAGES === 'true' && repo && !isRootPagesRepo ? `/${repo}` : '/';
-
 // https://astro.build/config
 export default defineConfig({
-	site: `https://${owner}.github.io`,
-	base,
+	site: 'https://eventsalsa.dev',
+	base: '/',
 	integrations: [
 		starlight({
 			title: 'eventsalsa',
@@ -18,11 +13,28 @@ export default defineConfig({
 			tagline: 'A component-based stack for event sourcing in Go.',
 			lastUpdated: true,
 			disable404Route: true,
+			head: [
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'go-import',
+						content: 'eventsalsa.dev git https://github.com/eventsalsa/eventsalsa',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'go-source',
+						content:
+							'eventsalsa.dev https://github.com/eventsalsa/eventsalsa https://github.com/eventsalsa/eventsalsa/tree/main{/dir} https://github.com/eventsalsa/eventsalsa/blob/main{/dir}/{file}#L{line}',
+					},
+				},
+			],
 			customCss: ['/src/styles/design-theme.css'],
 			components: {
 				Header: './src/components/starlight/Header.astro',
 			},
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eventsalsa/store' }],
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eventsalsa/eventsalsa' }],
 			sidebar: [
 				{
 					label: 'Documentation',

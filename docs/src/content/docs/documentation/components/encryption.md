@@ -41,24 +41,24 @@ The runtime flow separates key persistence, KEK wrapping, and local symmetric AE
 
 | Package | Role |
 | :--- | :--- |
-| `github.com/eventsalsa/encryption` | Root sentinel errors, `EncryptedKey`, `KeyScope` (with canonical `AAD()`), and `ZeroBytes` memory scrubbing |
-| `github.com/eventsalsa/encryption/cipher` | `Cipher` AEAD interface with `aad []byte` support |
-| `github.com/eventsalsa/encryption/cipher/aesgcm` | Default AES-256-GCM authenticated cipher implementation |
-| `github.com/eventsalsa/encryption/kek` | `Wrapper`, `Rewrapper`, `Keyring`, and bounded TTL + LRU `CachingKeyring` decorator |
-| `github.com/eventsalsa/encryption/kek/local` | In-process AES-256-GCM `Wrapper` and in-memory / file-based `Keyring` loaders |
-| `github.com/eventsalsa/encryption/kek/awskms` | AWS KMS `Wrapper` and server-side `kms:ReEncrypt` `Rewrapper` (separate Go sub-module) |
-| `github.com/eventsalsa/encryption/kek/gcpkms` | Google Cloud KMS `Wrapper` with end-to-end CRC32C integrity verification (separate Go sub-module) |
-| `github.com/eventsalsa/encryption/envelope` | `Envelope` engine and reusable in-memory `Session` handles |
-| `github.com/eventsalsa/encryption/postgres` | Stateless PostgreSQL `Store` and batch `RewrapKeys` administrative utility |
-| `github.com/eventsalsa/encryption/postgres/migrations` | Migration SQL generator and embedded schema definitions |
-| `github.com/eventsalsa/encryption/hash` | `Hasher` interface and HMAC-SHA256 blind indexing implementation |
+| `eventsalsa.dev/encryption` | Root sentinel errors, `EncryptedKey`, `KeyScope` (with canonical `AAD()`), and `ZeroBytes` memory scrubbing |
+| `eventsalsa.dev/encryption/cipher` | `Cipher` AEAD interface with `aad []byte` support |
+| `eventsalsa.dev/encryption/cipher/aesgcm` | Default AES-256-GCM authenticated cipher implementation |
+| `eventsalsa.dev/encryption/kek` | `Wrapper`, `Rewrapper`, `Keyring`, and bounded TTL + LRU `CachingKeyring` decorator |
+| `eventsalsa.dev/encryption/kek/local` | In-process AES-256-GCM `Wrapper` and in-memory / file-based `Keyring` loaders |
+| `eventsalsa.dev/encryption/kek/awskms` | AWS KMS `Wrapper` and server-side `kms:ReEncrypt` `Rewrapper` (separate Go sub-module) |
+| `eventsalsa.dev/encryption/kek/gcpkms` | Google Cloud KMS `Wrapper` with end-to-end CRC32C integrity verification (separate Go sub-module) |
+| `eventsalsa.dev/encryption/envelope` | `Envelope` engine and reusable in-memory `Session` handles |
+| `eventsalsa.dev/encryption/postgres` | Stateless PostgreSQL `Store` and batch `RewrapKeys` administrative utility |
+| `eventsalsa.dev/encryption/postgres/migrations` | Migration SQL generator and embedded schema definitions |
+| `eventsalsa.dev/encryption/hash` | `Hasher` interface and HMAC-SHA256 blind indexing implementation |
 
 ## Installation
 
 Install the core module and `pgx/v5`:
 
 ```bash
-go get github.com/eventsalsa/encryption
+go get eventsalsa.dev/encryption
 go get github.com/jackc/pgx/v5
 ```
 
@@ -66,10 +66,10 @@ The root module keeps its dependency footprint minimal and free of cloud SDKs. I
 
 ```bash
 # Optional: AWS KMS KEK provider
-go get github.com/eventsalsa/encryption/kek/awskms
+go get eventsalsa.dev/encryption/kek/awskms
 
 # Optional: Google Cloud KMS KEK provider
-go get github.com/eventsalsa/encryption/kek/gcpkms
+go get eventsalsa.dev/encryption/kek/gcpkms
 ```
 
 ## Database migration
@@ -77,7 +77,7 @@ go get github.com/eventsalsa/encryption/kek/gcpkms
 The PostgreSQL keystore requires a dedicated table to persist wrapped DEKs. Generate the migration SQL using the `migrate-gen` CLI:
 
 ```bash
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -output ./migrations
+go run eventsalsa.dev/encryption/cmd/migrate-gen -output ./migrations
 ```
 
 This writes a timestamped migration file (for example, `migrations/20261015120000_init_encryption_keys.sql`).
@@ -86,13 +86,13 @@ You can also specify a custom filename, print the SQL to standard output, or ove
 
 ```bash
 # Output with a specific filename
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -output ./migrations -filename 003_encryption_keys.sql
+go run eventsalsa.dev/encryption/cmd/migrate-gen -output ./migrations -filename 003_encryption_keys.sql
 
 # Print SQL directly to stdout
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -stdout
+go run eventsalsa.dev/encryption/cmd/migrate-gen -stdout
 
 # Apply custom schema and table names
-go run github.com/eventsalsa/encryption/cmd/migrate-gen -schema custom_infra -table custom_keys -stdout
+go run eventsalsa.dev/encryption/cmd/migrate-gen -schema custom_infra -table custom_keys -stdout
 ```
 
 The default schema is `infrastructure` and the default table name is `encryption_keys`.
@@ -106,8 +106,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/encryption/postgres/migrations"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/encryption/postgres/migrations"
 )
 
 func main() {
@@ -144,8 +144,8 @@ package main
 import (
 	"log"
 
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/local"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 func initLocalKeyring() kek.Keyring {
@@ -190,8 +190,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/awskms"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/awskms"
 )
 
 func initAWSKeyring(ctx context.Context) kek.Keyring {
@@ -240,8 +240,8 @@ import (
 	"log"
 
 	kms "cloud.google.com/go/kms/apiv1"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/gcpkms"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/gcpkms"
 )
 
 func initGCPKeyring(ctx context.Context) (kek.Keyring, func() error) {
@@ -277,7 +277,7 @@ package main
 import (
 	"time"
 
-	"github.com/eventsalsa/encryption/kek"
+	"eventsalsa.dev/encryption/kek"
 )
 
 func withDEKCache(base kek.Keyring) (*kek.CachingKeyring, error) {
@@ -301,10 +301,10 @@ import (
 	"context"
 	"log"
 
-	"github.com/eventsalsa/encryption/cipher/aesgcm"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/kek/local"
-	"github.com/eventsalsa/encryption/postgres"
+	"eventsalsa.dev/encryption/cipher/aesgcm"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/kek/local"
+	"eventsalsa.dev/encryption/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -400,10 +400,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/envelope"
-	encpostgres "github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/envelope"
+	encpostgres "eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/store"
 )
 
 type UserRegisteredPayload struct {
@@ -529,9 +529,9 @@ import (
 	"fmt"
 
 	"github.com/acme/shop/internal/domain/user"
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/hash"
-	"github.com/eventsalsa/encryption/postgres"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/hash"
+	"eventsalsa.dev/encryption/postgres"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -616,7 +616,7 @@ import (
 	"time"
 
 	"github.com/acme/shop/internal/domain/user"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -702,9 +702,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -837,8 +837,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/encryption/postgres"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/encryption/postgres"
+	"eventsalsa.dev/store"
 )
 
 func HandleErasureRequest(
@@ -912,8 +912,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/eventsalsa/encryption/envelope"
-	"github.com/eventsalsa/encryption/postgres"
+	"eventsalsa.dev/encryption/envelope"
+	"eventsalsa.dev/encryption/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -1027,7 +1027,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/eventsalsa/encryption/hash"
+	"eventsalsa.dev/encryption/hash"
 )
 
 func main() {
@@ -1089,7 +1089,7 @@ Plaintext DEKs should never linger in the Go heap longer than necessary:
 
 ### Sentinel errors
 
-All packages return shared sentinel errors defined in root `github.com/eventsalsa/encryption`:
+All packages return shared sentinel errors defined in root `eventsalsa.dev/encryption`:
 
 | Sentinel Error | Description |
 | :--- | :--- |
