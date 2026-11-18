@@ -1,0 +1,878 @@
+---
+title: Store
+description: Append, read, and project events with eventsalsa/store.
+---
+
+`eventsalsa/store` is the append-only event store in the eventsalsa bundle. It is intentionally small: it gives you immutable event persistence, optimistic concurrency, stream reads, global log reads, and a PostgreSQL implementation that works inside your own transaction (`pgx.Tx`).
+
+That shape matters. The store does not try to own your domain model, your application services, or your transaction boundaries. It gives you a reliable event log and the primitives around it, then gets out of the way.
+
+At a practical level, the component covers:
+
+- appending one or more events for a single stream instance
+- optimistic concurrency through expected versions and stream heads
+- reading a stream back in version order
+- reading the global log for projections and subscribers
+- migration generation for standard and partitioned PostgreSQL schemas
+- event mapping code generation through `eventmap-gen`
+
+## Appending events
+
+Appending is the write operation at the heart of the store. You construct one or more `store.Event` values, open a SQL transaction, and call `Append`.
+
+Every append is scoped to one stream instance. In other words, the events in a single append call must all share the same `StreamType` and `StreamID`. That matches the shape of a command in a typical event-sourced system: one command loads one aggregate, makes a decision, emits one or more events, and commits them atomically to the stream.
+
+In a healthy codebase, this usually lives in a repository adapter or persistence adapter rather than directly in an HTTP handler or service layer.
+
+### What is in a store event?
+
+Before persistence, you work with `store.Event`. After persistence, the store returns `store.PersistedEvent`, which adds the values assigned by the database during append.
+
+| Field | Meaning |
+| --- | --- |
+| `StreamType` | The logical type of the stream, for example `Order`. Keep it stable. |
+| `StreamID` | The identifier of one stream instance, for example an order ID. |
+| `StreamVersion` | The event's position inside that stream. The store assigns it during append. |
+| `GlobalPosition` | The event's position in the global log. The store assigns it during append. Useful for projections and global log readers. |
+| `EventType` | The logical event name, for example `OrderPlaced`. |
+| `EventVersion` | The schema version of the payload for that event type. |
+| `Payload` | The serialized event body. In the examples below it is JSON, but the field itself is just `[]byte`. |
+| `Metadata` | Cross-cutting metadata such as actor, tenant, request information, or audit context. With the default PostgreSQL schema, JSON bytes are the natural fit here. |
+| `TraceID` | Optional tracing identifier for distributed tracing. |
+| `CorrelationID` | Optional identifier used to group related work across events. |
+| `CausationID` | Optional identifier for the direct cause of this event, often a command ID or upstream event ID. |
+| `EventID` | A unique identifier for the event itself. |
+| `CreatedAt` | The timestamp carried with the event. |
+
+Two values deserve special attention because they are easy to conflate:
+
+- **`StreamVersion`** is local to one stream. It starts at `1` for the first event of a given stream and then increases by one for each subsequent event in that stream.
+- **`GlobalPosition`** is global to the store. It is assigned from the event log sequence and is useful for reading the whole log in order.
+
+If an order stream is currently at stream version `7` and a command appends two new events, those events will be stored at stream versions `8` and `9`. At the same time, they also get global positions in the shared event log.
+
+:::caution
+`global_position` is useful for projections and event readers, but it is **not** a safe naive checkpoint frontier under concurrent writers. PostgreSQL sequences guarantee uniqueness, not commit order. A lower position can become visible after a higher one has already been returned.
+:::
+
+### Optimistic concurrency
+
+The store uses expected versions for optimistic concurrency. When you append, you tell the store what version you believe the stream is currently at. If reality does not match that expectation, the append fails with `store.ErrOptimisticConcurrency`.
+
+That is the normal safety mechanism for command handling in event sourcing. You load the aggregate, make a decision based on its current state, and append only if nobody else has changed that stream in the meantime.
+
+`eventsalsa/store` gives you three expected-version modes:
+
+| Call | Meaning | Typical use |
+| --- | --- | --- |
+| `store.NoStream()` | The stream must not exist yet. | Creating a new stream (e.g., initial aggregate creation). |
+| `store.Exact(n)` | The stream must currently be at version `n`. | Normal updates to an existing stream. |
+| `store.Any()` | Skip version validation entirely. | Specialized cases such as imports or internal tooling. |
+
+`NoStream()` is the clearest way to express stream creation, even though `Exact(0)` is equivalent under the hood.
+
+In practice, optimistic concurrency looks like this:
+
+```go
+expected := store.NoStream()
+if order.Version > 0 {
+	expected = store.Exact(order.Version)
+}
+
+result, err := eventStore.Append(ctx, tx, expected, events)
+if err != nil {
+	return err
+}
+
+newVersion := result.ToVersion()
+```
+
+If two requests both load an order at version `7`, one of them can win and append version `8`. The other still tries `store.Exact(7)`, sees that the stream has moved on, and gets `store.ErrOptimisticConcurrency` instead of silently writing over someone else's decision.
+
+#### Authoritative `stream_heads` reservation
+
+`eventsalsa/store` enforces optimistic concurrency by atomically checking and reserving the version range on the `stream_heads` table inside the caller's transaction before inserting any events:
+
+1. **`NoStream()` / `Exact(0)`**: Executes an `INSERT INTO stream_heads (stream_type, stream_id, stream_version, updated_at) VALUES ($1, $2, $numEvents, NOW())`. If the stream head row already exists, PostgreSQL raises a primary key conflict on `(stream_type, stream_id)`, which the store translates to `store.ErrOptimisticConcurrency`.
+2. **`Exact(n)`**: Executes an `UPDATE stream_heads SET stream_version = stream_version + $numEvents, updated_at = NOW() WHERE stream_type = $1 AND stream_id = $2 AND stream_version = $n`. If the stream does not exist or its current version does not match `n`, zero rows are updated and the store returns `store.ErrOptimisticConcurrency`.
+3. **`Any()`**: Executes an atomic UPSERT (`INSERT INTO stream_heads ... ON CONFLICT (stream_type, stream_id) DO UPDATE SET stream_version = stream_heads.stream_version + EXCLUDED.stream_version RETURNING stream_version`), allocating consecutive version numbers even under concurrent writes.
+
+Because version validation executes against `stream_heads` within the caller's transaction, a row-level lock on `(stream_type, stream_id)` is held until commit or rollback. This ensures strict serializability per stream and prevents race conditions between validation and insertion.
+
+On standard unpartitioned tables, the database-level `UNIQUE (stream_type, stream_id, stream_version)` constraint on `events` serves as a secondary safety net. On partitioned tables where cross-partition unique constraints cannot span the entire table, `stream_heads` provides 100% authoritative concurrency control.
+
+### A repository adapter example
+
+This is the kind of code you would typically keep in an infrastructure adapter for an `Order` aggregate:
+
+```go
+package persistence
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/eventsalsa/store"
+	"github.com/eventsalsa/store/postgres"
+	orderes "github.com/acme/shop/internal/infrastructure/order/persistence/generated"
+)
+
+type CommandMetadata struct {
+	CommandID     string
+	CorrelationID string
+	TraceID       string
+}
+
+type OrderRepository struct {
+	db         *pgxpool.Pool
+	eventStore *postgres.Store
+}
+
+func (r *OrderRepository) Save(ctx context.Context, order *Order, meta CommandMetadata) error {
+	events, err := orderes.ToESEvents(
+		"Order",
+		order.ID,
+		order.PendingEvents(),
+		orderes.WithCausationID(meta.CommandID),
+		orderes.WithCorrelationID(meta.CorrelationID),
+		orderes.WithTraceID(meta.TraceID),
+	)
+	if err != nil {
+		return err
+	}
+
+	expected := store.NoStream()
+	if order.Version > 0 {
+		expected = store.Exact(order.Version)
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	result, err := r.eventStore.Append(ctx, tx, expected, events)
+	if err != nil {
+		return err
+	}
+
+	order.Version = result.ToVersion()
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	order.ClearPendingEvents()
+	return nil
+}
+```
+
+The important part is not the exact repository shape. The important part is the flow:
+
+1. build store events from the aggregate's pending event bag
+2. choose the expected version from the aggregate's current version
+3. append inside a short transaction
+4. clear the pending event bag only after commit succeeds
+5. treat `store.ErrOptimisticConcurrency` as a normal business race, not as a mysterious infrastructure problem
+
+## Mapping domain events with `eventmap-gen`
+
+Manually maintaining event type strings, payload marshalling, payload unmarshalling, and version dispatch gets old quickly. It is also easy to make avoidable mistakes. A typo in `"OrderConfirmed"` or a forgotten branch in a string-based switch will usually show up much later than you want.
+
+This is why `eventsalsa/store` ships `eventmap-gen`. It generates the mapping code between your domain event structs and `store.Event` / `store.PersistedEvent`.
+
+That buys you two things at once:
+
+- you keep domain events as plain Go types in the domain layer
+- you stop hand-writing repetitive mapping code in the infrastructure layer
+
+It also lets you switch on concrete Go types after decoding, which is usually easier to refactor and harder to get wrong than a large string switch.
+
+### Install it as a Go tool
+
+If you want the generator available to the project, add it as a tool dependency:
+
+```bash
+go get -tool github.com/eventsalsa/store/cmd/eventmap-gen
+```
+
+That gives you a stable project-local way to run it with `go tool eventmap-gen`.
+
+### Drive it through `go generate`
+
+One clean pattern is to keep the code generation directive in the infrastructure package that owns the generated code:
+
+```go
+package persistence
+
+//go:generate go tool eventmap-gen -input ../../../domain/order/events -output . -package persistence
+```
+
+From there, `go generate ./...` will regenerate the mapping code whenever the event set changes.
+
+:::tip
+Keep both the `go:generate` directive and the generated file in the infrastructure layer of your application.
+
+The domain layer should own the event structs themselves, but it should not need to import store-specific code. `eventmap-gen` exists so that infrastructure concerns stay in infrastructure.
+:::
+
+### What the generator produces
+
+The generated package includes generic helpers such as:
+
+- `EventTypeOf(...)`
+- `ToESEvents(...)`
+- `FromESEvent(...)`
+- `FromESEvents(...)`
+
+It also emits per-event helpers such as `ToOrderPlacedV1(...)` and `FromOrderPlacedV1(...)`.
+
+That gives you a clean write-side mapping:
+
+```go
+events, err := orderes.ToESEvents(
+	"Order",
+	orderID,
+	[]any{
+		orderv1.OrderPlaced{CustomerID: "cust_42", Currency: "EUR"},
+		orderv1.OrderLineAdded{SKU: "sku-coffee-grinder", Quantity: 1, UnitPriceCents: 12900},
+	},
+	orderes.WithTraceID(traceID),
+	orderes.WithCorrelationID(correlationID),
+	orderes.WithCausationID(commandID),
+)
+```
+
+And it gives you a type-safe read-side mapping:
+
+```go
+domainEvent, err := orderes.FromESEvent(event)
+if err != nil {
+	return err
+}
+
+switch e := domainEvent.(type) {
+case orderv1.OrderPlaced:
+	// work with the concrete Go type
+case orderv1.OrderLineAdded:
+	// work with the concrete Go type
+default:
+	return fmt.Errorf("unexpected order event %T", e)
+}
+```
+
+### Version detection
+
+`eventmap-gen` also detects event versions from your package layout. If your domain events live under versioned directories such as `v1`, `v2`, and so on, the generator will emit the matching `EventVersion` value automatically.
+
+For example:
+
+```text
+internal/domain/order/events/
+  v1/
+    order_placed.go
+    order_line_added.go
+    order_confirmed.go
+  v2/
+    order_placed.go
+```
+
+Events in `events/v1/` become `EventVersion: 1`. Events in `events/v2/` become `EventVersion: 2`. If no version directory is present, the default is version `1`.
+
+:::tip
+Version events from day one.
+
+Even if your first release only has `v1`, the explicit directory makes the intent obvious and keeps future schema evolution boring instead of dramatic.
+:::
+
+## Configuring the store
+
+The PostgreSQL implementation lives in `github.com/eventsalsa/store/postgres`. Most applications can start with `postgres.DefaultStoreConfig()`, but the component also exposes a small set of configuration options when you need to tailor table names, notifications, or logging.
+
+```go
+config := postgres.NewStoreConfig(
+	postgres.WithEventsTable("events"),
+	postgres.WithStreamHeadsTable("stream_heads"),
+	postgres.WithNotifyChannel("eventsalsa_events"),
+	postgres.WithLogger(ZapLogger{logger: zapLogger}),
+)
+
+eventStore := postgres.NewStore(config)
+```
+
+Here is what each option controls:
+
+| Option | Meaning | When to change it |
+| --- | --- | --- |
+| `WithEventsTable(...)` | Sets the event log table name. | Rename when your schema conventions require a different table name. |
+| `WithStreamHeadsTable(...)` | Sets the stream heads table name used for O(1) version lookups and atomic optimistic concurrency control. | Rename when your schema conventions require it. |
+| `WithNotifyChannel(...)` | Sends a PostgreSQL `NOTIFY` on successful append. | Useful when projections or background dispatchers wake up through `LISTEN/NOTIFY` instead of polling. |
+| `WithLogger(...)` | Plugs in store-level logging. | Useful for operational visibility in production and troubleshooting. |
+
+`WithNotifyChannel(...)` is worth calling out. The notification is emitted inside the append transaction, which means listeners only wake up after the transaction commits. That avoids phantom work on rolled-back writes.
+
+:::caution
+`WithNotifyChannel(...)` is a good fit when listeners hold real PostgreSQL connections and can safely `LISTEN` on the same database.
+
+If your projector instances connect through PgBouncer in transaction-pooling mode, they should rely on the projector's polling strategy instead of the notify-based wakeup, or connect the listener connection to a session-pooled port or directly to the database.
+:::
+
+## PgBouncer and Transaction Pooling
+
+`eventsalsa/store` is fully compatible with connection poolers like PgBouncer.
+
+### Supported Modes
+
+- **Transaction Pooling**: Fully supported for all core store operations (`Append`, `ReadEvents`, `ReadStream`). Since the store relies entirely on standard SQL statements executed within the caller-provided `pgx.Tx` transaction, it does not depend on session-level state.
+- **Session Pooling**: Fully supported.
+
+### Supported Query Execution Modes
+
+PgBouncer in transaction pooling mode is incompatible with server-side prepared statements because different transactions within the same client session can be routed to different database connections. 
+
+To support transaction pooling, you must configure `pgx` to use a query execution mode that does not rely on named server-side prepared statements. `eventsalsa` supports the following execution modes configured on your `pgxpool.Config` (via `ConnConfig.DefaultQueryExecMode`):
+
+- **Simple Protocol Mode (`pgx.QueryExecModeSimpleProtocol`)**: **Fully Supported**. This mode executes queries without preparing them first. `eventsalsa/store` is designed to be fully compatible with this mode; for instance, it automatically converts metadata byte parameters (`[]byte`) to standard string representations to ensure JSONB values bind correctly without binary description round-trips.
+- **Extended Protocol Exec Mode (`pgx.QueryExecModeExec`)**: **Fully Supported**. This mode uses the extended protocol to bind parameters but skips preparing the statement on the server.
+- **Describe Exec Mode (`pgx.QueryExecModeDescribeExec`)**: **Fully Supported**.
+- **Cache Describe Mode (`pgx.QueryExecModeCacheDescribe`)**: **Fully Supported**. Caches statement result descriptions using unnamed prepared statements (`Parse "" ...`), which are transaction-scoped and safe under PgBouncer transaction pooling.
+- **Cache Statement Mode (`pgx.QueryExecModeCacheStatement`)**: **Incompatible** with PgBouncer transaction pooling because it uses named prepared statements. Do not use this mode if routing through a transaction-pooled proxy.
+
+### LISTEN/NOTIFY and PgBouncer
+
+If you enable transaction-level notifications using `WithNotifyChannel(...)`, the `NOTIFY` is emitted using `pg_notify(...)` within the transaction. This is transaction-safe and works under PgBouncer transaction pooling.
+
+However, receiving notifications (`LISTEN`) is a session-level operation. Any process listening for wakeups (such as the notify-based projector dispatcher) must bypass transaction pooling, either by using PgBouncer in session pooling mode or by connecting directly to the database.
+
+## Reading streams
+
+Reading a stream is what you do when you want the most accurate view of one aggregate's state. That is the normal path for command handling: load the stream, replay it into an entity, make a decision, and then append new events with an expected version derived from that entity.
+
+It is a good fit for:
+
+- command handling
+- invariants that need the aggregate's exact current state
+- rebuilding one aggregate for debugging or audit purposes
+- partial replays over a known version range
+
+It is **not** a good fit for:
+
+- list pages
+- search screens
+- dashboards
+- reports that need to scan many aggregates at once
+
+Those cases are where read models and projections come in.
+
+### Load one stream
+
+`ReadStream` returns the events for one stream instance ordered by `stream_version`:
+
+```go
+tx, err := db.Begin(ctx)
+if err != nil {
+	return err
+}
+defer tx.Rollback(ctx) //nolint:errcheck
+
+stream, err := eventStore.ReadStream(ctx, tx, "Order", orderID, nil, nil)
+if err != nil {
+	return err
+}
+
+if err := tx.Commit(ctx); err != nil {
+	return err
+}
+```
+
+The version bounds are optional and inclusive. That is useful when you want to replay a slice of history instead of the whole stream:
+
+```go
+fromVersion := int64(5)
+toVersion := int64(9)
+
+stream, err := eventStore.ReadStream(ctx, tx, "Order", orderID, &fromVersion, &toVersion)
+```
+
+### Load and replay with generated helpers
+
+There are two layers involved here and it is worth keeping them separate.
+
+The repository adapter is responsible for reading the stream and translating persisted events into domain events. The aggregate is responsible for applying already-decoded domain events.
+
+In the infrastructure layer, a `Load` function can do the stream read and the decoding:
+
+```go
+package persistence
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/acme/shop/internal/domain/order"
+	orderes "github.com/acme/shop/internal/infrastructure/order/persistence/generated"
+)
+
+func (r *OrderRepository) Load(ctx context.Context, orderID string) (*order.Order, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	stream, err := r.eventStore.ReadStream(ctx, tx, "Order", orderID, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	decoded, err := orderes.FromESEvents[any](stream.Events)
+	if err != nil {
+		return nil, err
+	}
+
+	aggregate := &order.Order{}
+	for i, event := range decoded {
+		if err := aggregate.Apply(event); err != nil {
+			return nil, fmt.Errorf("apply order event %d: %w", i, err)
+		}
+	}
+
+	aggregate.Version = stream.Version()
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return aggregate, nil
+}
+```
+
+Inside the domain, `Apply` can now stay focused on domain events and nothing else:
+
+```go
+package order
+
+import (
+	"fmt"
+
+	orderv1 "github.com/acme/shop/internal/domain/order/events/v1"
+)
+
+type Order struct {
+	ID         string
+	CustomerID string
+	Currency   string
+	Status     string
+	LineCount  int
+	TotalCents int64
+	Version    int64
+}
+
+func (o *Order) Apply(event any) error {
+	switch e := event.(type) {
+	case orderv1.OrderPlaced:
+		o.ID = e.OrderID
+		o.CustomerID = e.CustomerID
+		o.Currency = e.Currency
+		o.Status = "pending"
+
+	case orderv1.OrderLineAdded:
+		o.LineCount += e.Quantity
+		o.TotalCents += int64(e.Quantity) * e.UnitPriceCents
+
+	case orderv1.OrderConfirmed:
+		o.Status = "confirmed"
+
+	default:
+		return fmt.Errorf("unexpected order event %T", e)
+	}
+
+	return nil
+}
+```
+
+That keeps the boundary clean. The infrastructure layer knows how to read and decode persisted events. The domain layer only knows how to apply business facts.
+
+When business logic needs a precise, authoritative state snapshot, replaying the stream is the safe place to stand. For broad query workloads, however, rebuilding many aggregates on demand is usually the wrong tool.
+
+## Projections and read models
+
+A projection is the process that reads events and keeps some query-friendly structure up to date. The thing it maintains is the read model.
+
+That distinction matters because event streams and read models solve different problems:
+
+- the stream is your source of truth for business history
+- the read model is shaped for queries such as list, search, filter, and reporting
+
+If someone asks for "all confirmed orders from last week", you probably do not want to rebuild every order stream at request time. You want a read model that already has the relevant fields arranged for that query.
+
+In store terms, projections usually consume the global log through `ReadEvents`, either synchronously in the command transaction or asynchronously through [`eventsalsa/projector`](../projector/).
+
+### An inline projection
+
+For an orders list page, a read model might look like this:
+
+```sql
+CREATE TABLE order_overview_v1 (
+    order_id     TEXT PRIMARY KEY,
+    customer_id  TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    currency     TEXT NOT NULL,
+    total_cents  BIGINT NOT NULL,
+    line_count   INTEGER NOT NULL,
+    version      BIGINT NOT NULL
+);
+```
+
+An inline projection handler can define a `Name()` to identify the read model and a `Handle(...)` method that receives persisted events and updates the table:
+
+```go
+type OrderOverviewProjection struct{}
+
+func (p *OrderOverviewProjection) Name() string {
+	return "order_overview_v1"
+}
+
+func (p *OrderOverviewProjection) Handle(ctx context.Context, tx pgx.Tx, event store.PersistedEvent) error {
+	domainEvent, err := orderes.FromESEvent(event)
+	if err != nil {
+		return err
+	}
+
+	switch e := domainEvent.(type) {
+	case orderv1.OrderPlaced:
+		_, err = tx.Exec(ctx, `
+			INSERT INTO order_overview_v1 (
+				order_id,
+				customer_id,
+				status,
+				currency,
+				total_cents,
+				line_count,
+				version
+			)
+			VALUES ($1, $2, 'pending', $3, 0, 0, $4)
+			ON CONFLICT (order_id) DO UPDATE
+			SET customer_id = EXCLUDED.customer_id,
+			    status = EXCLUDED.status,
+			    currency = EXCLUDED.currency,
+			    version = EXCLUDED.version
+			WHERE order_overview_v1.version < EXCLUDED.version
+		`, event.StreamID, e.CustomerID, e.Currency, event.StreamVersion)
+		return err
+
+	case orderv1.OrderLineAdded:
+		_, err = tx.Exec(ctx, `
+			UPDATE order_overview_v1
+			SET total_cents = total_cents + $2,
+			    line_count = line_count + $3,
+			    version = $4
+			WHERE order_id = $1
+			  AND version < $4
+		`, event.StreamID, int64(e.Quantity)*e.UnitPriceCents, e.Quantity, event.StreamVersion)
+		return err
+
+	case orderv1.OrderConfirmed:
+		_, err = tx.Exec(ctx, `
+			UPDATE order_overview_v1
+			SET status = 'confirmed',
+			    version = $2
+			WHERE order_id = $1
+			  AND version < $2
+		`, event.StreamID, event.StreamVersion)
+		return err
+
+	default:
+		return nil
+	}
+}
+```
+
+The `version` column is what keeps this projection idempotent. If the same event is replayed or retried, the update is ignored once the row has already reached that stream version.
+
+:::tip
+By implementing both `Name() string` and `Handle(ctx, tx, event) error`, this projection handler is already structured to fit directly into [`eventsalsa/projector`](../projector/) if you later choose to run it asynchronously.
+:::
+
+### Strong consistency in the repository
+
+If the read model is cheap to update and you need it to be fresh immediately after the command commits, run the projection inside the same transaction as the append.
+
+That turns the repository adapter from earlier into a strongly consistent write path:
+
+```go
+result, err := r.eventStore.Append(ctx, tx, expected, events)
+if err != nil {
+	return err
+}
+
+for _, event := range result.Events {
+	if err := r.orderOverview.Handle(ctx, tx, event); err != nil {
+		return err
+	}
+}
+
+if err := tx.Commit(ctx); err != nil {
+	return err
+}
+```
+
+This is a strong consistency story in the plain sense of the term: once the transaction commits, both the event stream and the `order_overview_v1` row describe the same change set.
+
+That is a good fit for read models that are:
+
+- quick to update
+- local to the same database transaction
+- needed immediately by the next request or redirect
+
+### Eventual consistency and `eventsalsa/projector`
+
+Not every projection belongs in the write transaction.
+
+When the projection is expensive, touches outside systems, fans out to many destinations, or simply needs to scale separately from the command path, eventual consistency is usually the better choice. In that model, the append commits first and the projection catches up afterward.
+
+That is where [`eventsalsa/projector`](../projector/) comes in. The projection handler logic stays the same, but execution moves out of the request path into an asynchronous background daemon with distributed checkpointing and rebalancing.
+
+As a rule of thumb:
+
+- choose **strong consistency** for lightweight read models that should be fresh immediately
+- choose **eventual consistency** for heavier projections, integrations, search indexing, analytics, and other work that does not belong on the command's critical path
+
+:::note
+Read models maintained by projections are for query workloads.
+
+Use stream reads when you need one aggregate's exact state for business logic. Use read models when you need list screens, filters, reporting, search, or anything else that spans many aggregates.
+:::
+
+## Observability
+
+The store keeps observability deliberately simple. It exposes a small logger interface for logging store operations.
+
+### Logging store operations
+
+`eventsalsa/store` accepts a `store.Logger`. If you already standardize on Zap, the adapter can stay small:
+
+```go
+type ZapLogger struct {
+	logger *zap.Logger
+}
+
+func (l ZapLogger) Debug(_ context.Context, msg string, keyvals ...interface{}) {
+	l.logger.Debug(msg, zapFields(keyvals)...)
+}
+
+func (l ZapLogger) Info(_ context.Context, msg string, keyvals ...interface{}) {
+	l.logger.Info(msg, zapFields(keyvals)...)
+}
+
+func (l ZapLogger) Error(_ context.Context, msg string, keyvals ...interface{}) {
+	l.logger.Error(msg, zapFields(keyvals)...)
+}
+
+func zapFields(keyvals []interface{}) []zap.Field {
+	fields := make([]zap.Field, 0, len(keyvals)/2)
+	for i := 0; i+1 < len(keyvals); i += 2 {
+		key, ok := keyvals[i].(string)
+		if !ok {
+			continue
+		}
+		fields = append(fields, zap.Any(key, keyvals[i+1]))
+	}
+	return fields
+}
+```
+
+That is enough for append, read, and concurrency-conflict logs to show up in the same logging pipeline as the rest of the application. For real-time telemetry, lag tracking, and Prometheus metrics on asynchronous projection pipelines, see the [Observability and telemetry](../projector/#observability-and-telemetry) section in the Projector documentation.
+
+## Migration generation
+
+The quickest way to create the store schema is `migrate-gen`:
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations
+```
+
+That command writes a PostgreSQL migration creating the `events` table and the `stream_heads` table. You can also set a stable file name:
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -filename 001_event_store.sql
+```
+
+If you want to customize table names from the CLI, flags are available:
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -events-table events \
+  -stream-heads-table stream_heads
+```
+
+### Advanced migration generation
+
+The CLI covers standard workflows. For programmatic generation or integration with deployment tooling, use the `migrations` package directly:
+
+```go
+config := migrations.DefaultConfig()
+config.OutputFolder = "db/migrations"
+config.OutputFilename = "001_event_store.sql"
+config.EventsTable = "events"
+config.StreamHeadsTable = "stream_heads"
+
+if err := migrations.GeneratePostgres(&config); err != nil {
+	return err
+}
+```
+
+:::caution
+If you change the generated table names, change the store configuration too.
+
+`migrations.Config` and `postgres.StoreConfig` need to stay aligned. A migration that creates `event_log` is not useful if the running store is still configured to read and write `events`.
+:::
+
+## Declarative Range Partitioning
+
+`eventsalsa/store` supports declarative PostgreSQL range partitioning on the `events` table by `global_position`. This allows event stores scaling to hundreds of millions or billions of events to maintain fast B-tree index scans, optimize autovacuum, and maximize write throughput.
+
+### Why partition on `global_position`?
+
+1. **Append-Only Monotonic Order**: All appends write sequentially into the newest active partition. Older partition indexes become read-only and stay hot in the OS page cache without ongoing index churn.
+2. **Sequential Log and Projection Pagination**: Readers scanning `ReadEvents(ctx, tx, fromPosition, limit)` process contiguous ranges localized within one or two partitions at a time.
+3. **Cross-Partition Optimistic Concurrency**: In PostgreSQL, parent tables partitioned by `RANGE (global_position)` cannot enforce cross-partition unique constraints on columns that do not include the partition key (i.e. `UNIQUE (stream_type, stream_id, stream_version)` cannot span partitions). `eventsalsa/store` resolves this by using the unpartitioned `stream_heads` table to atomically reserve version ranges before writing to `events`.
+
+### Native Range Partitioning
+
+Native partitioning creates a sequence and pre-allocates a configured number of partition child tables with zero-padded boundaries.
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -partition-strategy native \
+  -partition-size 10000000 \
+  -initial-partitions 4
+```
+
+This generates:
+- `events_global_position_seq`
+- Parent `events` table with `PARTITION BY RANGE (global_position)`
+- Pre-created initial partitions:
+  - `events_p0000000001_p0010000000` (values from 1 to 10,000,001)
+  - `events_p0010000001_p0020000000` (values from 10,000,001 to 20,000,001)
+  - `events_p0020000001_p0030000000` (values from 20,000,001 to 30,000,001)
+  - `events_p0030000001_p0040000000` (values from 30,000,001 to 40,000,001)
+- `stream_heads` table and parent indexes (automatically applied to all child partitions).
+
+Programmatic configuration with `migrations.Config`:
+
+```go
+config := migrations.DefaultConfig()
+config.Partitioning.Strategy = migrations.PartitionStrategyNative
+config.Partitioning.PartitionSize = 10000000
+config.Partitioning.InitialPartitions = 4
+
+if err := migrations.GeneratePostgres(&config); err != nil {
+	return err
+}
+```
+
+### `pg_partman` Dynamic Partitioning
+
+For automated partition creation without manual intervention, `eventsalsa/store` integrates with [`pg_partman`](https://github.com/pgpartman/pg_partman).
+
+#### Option A: Automated Maintenance with `pg_cron`
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -partition-strategy partman \
+  -partman-maintenance pg_cron \
+  -partition-size 10000000 \
+  -initial-partitions 4
+```
+
+This generates the `pg_partman` schema, registers the table via `partman.create_parent(...)`, and schedules maintenance hourly with `cron.schedule(...)`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_partman WITH SCHEMA partman;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+SELECT partman.create_parent(
+    p_parent_table => 'public.events',
+    p_control => 'global_position',
+    p_type => 'native',
+    p_interval => '10000000',
+    p_premake => 4
+);
+
+SELECT cron.schedule('partman-maintenance-events', '0 * * * *', $$CALL partman.run_maintenance_proc()$$);
+```
+
+#### Option B: Automated Maintenance with Background Worker (`pg_partman_bgw`)
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -partition-strategy partman \
+  -partman-maintenance bgw
+```
+
+Configure `postgresql.conf` on your PostgreSQL server:
+```ini
+shared_preload_libraries = 'pg_partman_bgw'
+pg_partman_bgw.interval = 3600
+pg_partman_bgw.role = 'postgres'
+pg_partman_bgw.dbname = 'mydb'
+```
+
+#### Option C: External / Manual Maintenance
+
+```bash
+go run github.com/eventsalsa/store/cmd/migrate-gen \
+  -output migrations \
+  -partition-strategy partman \
+  -partman-maintenance none
+```
+
+Run or schedule the procedure periodically from an external job scheduler (such as a Kubernetes CronJob or systemd timer):
+
+```sql
+CALL partman.run_maintenance_proc();
+```
+
+### DBA Runbook & Operations
+
+#### Monitoring Sequence Growth
+
+When using range partitioning, monitor the global position sequence value:
+
+```sql
+SELECT last_value FROM events_global_position_seq;
+```
+
+#### Pre-Creating Partitions (Native Mode)
+
+In native mode, ensure new partitions are provisioned before `global_position` reaches the boundary of the highest existing partition:
+
+```sql
+-- Example: creating partition for 40,000,001 to 50,000,000
+CREATE TABLE IF NOT EXISTS events_p0040000001_p0050000000 PARTITION OF events
+    FOR VALUES FROM (40000001) TO (50000001);
+```
+
+## Transactional outbox
+
+`eventsalsa` does not currently ship a transactional outbox component. In practice, though, the store works well with that pattern because your append already happens inside a caller-owned SQL transaction.
+
+If you need to publish integration messages atomically with your event-store write, one pragmatic route is to combine the store with Watermill and its SQL-backed forwarder approach. The usual shape is:
+
+1. append your domain events
+2. write an outbox row in the same SQL transaction
+3. let a forwarder publish those rows to the external broker
+
+If you want to explore that pattern, Watermill's forwarder guide is a good starting point: [Publishing messages in transactions with the Watermill Forwarder](https://watermill.io/advanced/forwarder/).
