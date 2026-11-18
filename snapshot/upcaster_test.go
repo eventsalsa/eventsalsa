@@ -7,10 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/snapshot"
+	"eventsalsa.dev/store"
+
+	"eventsalsa.dev/snapshot"
 )
 
 func TestRepository_Upcasters(t *testing.T) {

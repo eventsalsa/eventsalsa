@@ -7,13 +7,15 @@ import (
 	"log"
 	"time"
 
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/snapshot"
-	snapshotpostgres "github.com/eventsalsa/snapshot/postgres"
+	"eventsalsa.dev/store"
+	storemigrations "eventsalsa.dev/store/migrations"
+	storepostgres "eventsalsa.dev/store/postgres"
+
+	"eventsalsa.dev/snapshot"
+	snapshotpostgres "eventsalsa.dev/snapshot/postgres"
 )
 
 // User is our clean domain model.
@@ -41,94 +43,141 @@ type UserNameChanged struct {
 }
 
 func main() {
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
 	// Standard database connection pool.
 	// Adjust connection string as needed for your local postgres setup.
 	connStr := "host=localhost port=5432 user=postgres password=postgres dbname=eventsalsa_example sslmode=disable"
-	ctx := context.Background()
 
 	db, err := pgxpool.New(ctx, connStr)
 	if err != nil {
-		log.Fatalf("Failed to connect to database. Make sure PostgreSQL is running: %v", err)
+		return fmt.Errorf("connect to database (ensure PostgreSQL is running): %w", err)
 	}
 	defer db.Close()
 
-	// Initialize tables for the example
-	setupTables(ctx, db)
-
-	// 1. Initialize Event Store
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-
-	// 2. Initialize Snapshot Store
-	snapshotStore := snapshotpostgres.NewStore(snapshotpostgres.DefaultStoreConfig())
-
-	// 3. Define Repository Configuration
-	repoConfig := snapshot.RepositoryConfig[*User]{
-		StreamType:    "User",
-		SchemaVersion: 1, // Current schema version of the User model
-
-		Initializer: func(id string) *User {
-			return &User{ID: id}
-		},
-
-		Apply: func(u *User, event store.PersistedEvent) (*User, error) {
-			fmt.Printf("  [Apply Event] Replaying %s (v%d)\n", event.EventType, event.StreamVersion)
-			switch event.EventType {
-			case "UserCreated":
-				var payload UserCreated
-				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return nil, err
-				}
-				u.Name = payload.Name
-				u.Email = payload.Email
-			case "UserEmailChanged":
-				var payload UserEmailChanged
-				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return nil, err
-				}
-				u.Email = payload.Email
-			case "UserNameChanged":
-				var payload UserNameChanged
-				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return nil, err
-				}
-				u.Name = payload.Name
-			}
-			return u, nil
-		},
-
-		Codec: snapshot.JSON[*User](),
+	if setupErr := setupTables(ctx, db); setupErr != nil {
+		return setupErr
 	}
 
+	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
+	snapshotStore := snapshotpostgres.NewStore(snapshotpostgres.DefaultStoreConfig())
+
+	repoConfig := newUserRepoConfig(1)
 	repo, err := snapshot.NewRepository(eventStore, snapshotStore, repoConfig)
 	if err != nil {
-		log.Fatalf("Failed to create snapshot repository: %v", err)
+		return fmt.Errorf("create snapshot repository: %w", err)
 	}
 
 	userID := uuid.New().String()
 
-	// --- Step 1: Load Stream State (from empty) ---
+	if stepErr := stepLoadEmpty(ctx, db, repo, userID); stepErr != nil {
+		return stepErr
+	}
+
+	currVer, err := stepCreateUser(ctx, db, eventStore, userID)
+	if err != nil {
+		return err
+	}
+
+	if appendErr := stepAppendEmailChanges(ctx, db, eventStore, userID, currVer); appendErr != nil {
+		return appendErr
+	}
+
+	currVer, err = stepSaveSnapshot(ctx, db, eventStore, repo, userID)
+	if err != nil {
+		return err
+	}
+
+	currVer, err = stepAppendNameChanges(ctx, db, eventStore, userID, currVer)
+	if err != nil {
+		return err
+	}
+
+	if stepErr := stepVerifySnapshotHit(ctx, db, repo, userID, currVer); stepErr != nil {
+		return stepErr
+	}
+
+	return stepSimulateSchemaMigration(ctx, db, eventStore, snapshotStore, userID)
+}
+
+func newUserRepoConfig(schemaVersion int) snapshot.RepositoryConfig[*User] {
+	return snapshot.RepositoryConfig[*User]{
+		StreamType:    "User",
+		SchemaVersion: schemaVersion,
+		Initializer: func(id string) *User {
+			return &User{ID: id}
+		},
+		Apply: applyUserEvent,
+		Codec: snapshot.JSON[*User](),
+	}
+}
+
+func applyUserEvent(u *User, event store.PersistedEvent) (*User, error) { //nolint:gocritic // hugeParam: matches snapshot.RepositoryConfig Apply signature
+	fmt.Printf("  [Apply Event] Replaying %s (v%d)\n", event.EventType, event.StreamVersion)
+	switch event.EventType {
+	case "UserCreated":
+		var payload UserCreated
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, err
+		}
+		u.Name = payload.Name
+		u.Email = payload.Email
+	case "UserEmailChanged":
+		var payload UserEmailChanged
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, err
+		}
+		u.Email = payload.Email
+	case "UserNameChanged":
+		var payload UserNameChanged
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, err
+		}
+		u.Name = payload.Name
+	}
+	return u, nil
+}
+
+func stepLoadEmpty(ctx context.Context, db *pgxpool.Pool, repo *snapshot.Repository[*User], userID string) error {
 	fmt.Println("\n--- Step 1: Loading non-existent User ---")
 	tx, err := db.Begin(ctx)
 	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback on read-only tx
+		_ = tx.Rollback(ctx)
+	}()
 
 	res, err := repo.Load(ctx, tx, userID)
 	if err != nil {
-		log.Fatalf("Load failed: %v", err)
+		return fmt.Errorf("load empty user: %w", err)
 	}
-	_ = tx.Rollback(ctx)
 
 	fmt.Printf("Loaded state: %+v, version: %d\n", res.State, res.StreamVersion)
+	return nil
+}
 
-	// --- Step 2: Save Event 1 (UserCreated) ---
+func stepCreateUser(ctx context.Context, db *pgxpool.Pool, eventStore *storepostgres.Store, userID string) (int64, error) {
 	fmt.Println("\n--- Step 2: Appending UserCreated event ---")
-	tx, err = db.Begin(ctx)
+	payload, err := json.Marshal(UserCreated{Name: "Alice", Email: "alice@example.com"})
 	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
+		return 0, fmt.Errorf("marshal UserCreated: %w", err)
 	}
 
-	payload, _ := json.Marshal(UserCreated{Name: "Alice", Email: "alice@example.com"})
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback after commit or failure
+		_ = tx.Rollback(ctx)
+	}()
+
 	events := []store.Event{
 		{
 			StreamType: "User",
@@ -141,22 +190,33 @@ func main() {
 	}
 	result, err := eventStore.Append(ctx, tx, store.NoStream(), events)
 	if err != nil {
-		log.Fatalf("Append failed: %v", err)
+		return 0, fmt.Errorf("append UserCreated: %w", err)
 	}
-	_ = tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit UserCreated: %w", err)
+	}
+
 	fmt.Printf("Created User version: %d\n", result.ToVersion())
+	return result.ToVersion(), nil
+}
 
-	// --- Step 3: Append multiple changes (v2 to v4) ---
+func stepAppendEmailChanges(ctx context.Context, db *pgxpool.Pool, eventStore *storepostgres.Store, userID string, currVer int64) error {
 	fmt.Println("\n--- Step 3: Appending more changes (v2 -> v4) ---")
-	tx, err = db.Begin(ctx)
+	tx, err := db.Begin(ctx)
 	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback after commit or failure
+		_ = tx.Rollback(ctx)
+	}()
 
-	currVer := result.ToVersion()
 	emails := []string{"alice.smith@example.com", "alice.s@example.com", "alice.s.work@example.com"}
 	for _, email := range emails {
-		payload, _ = json.Marshal(UserEmailChanged{Email: email})
+		payload, marshalErr := json.Marshal(UserEmailChanged{Email: email})
+		if marshalErr != nil {
+			return fmt.Errorf("marshal UserEmailChanged: %w", marshalErr)
+		}
 		ev := []store.Event{
 			{
 				StreamType: "User",
@@ -167,28 +227,41 @@ func main() {
 				CreatedAt:  time.Now(),
 			},
 		}
-		res, err := eventStore.Append(ctx, tx, store.Exact(currVer), ev)
-		if err != nil {
-			log.Fatalf("Append v%d failed: %v", currVer+1, err)
+		res, appendErr := eventStore.Append(ctx, tx, store.Exact(currVer), ev)
+		if appendErr != nil {
+			return fmt.Errorf("append v%d: %w", currVer+1, appendErr)
 		}
 		currVer = res.ToVersion()
 	}
-	_ = tx.Commit(ctx)
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit email changes: %w", err)
+	}
 	fmt.Printf("User is now at version: %d\n", currVer)
+	return nil
+}
 
-	// --- Step 4: Rehydrate from events, append change, and save snapshot ---
+func stepSaveSnapshot(ctx context.Context, db *pgxpool.Pool, eventStore *storepostgres.Store, repo *snapshot.Repository[*User], userID string) (int64, error) {
 	fmt.Println("\n--- Step 4: Appending change (v5) and saving snapshot ---")
-	tx, err = db.Begin(ctx)
+	tx, err := db.Begin(ctx)
 	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback after commit or failure
+		_ = tx.Rollback(ctx)
+	}()
+
+	res, err := repo.Load(ctx, tx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("load before snapshot: %w", err)
 	}
 
-	res, err = repo.Load(ctx, tx, userID)
+	payload, err := json.Marshal(UserEmailChanged{Email: "alice.smith.hq@example.com"})
 	if err != nil {
-		log.Fatalf("Load failed: %v", err)
+		return 0, fmt.Errorf("marshal UserEmailChanged: %w", err)
 	}
 
-	payload, _ = json.Marshal(UserEmailChanged{Email: "alice.smith.hq@example.com"})
 	ev := []store.Event{
 		{
 			StreamType: "User",
@@ -201,30 +274,38 @@ func main() {
 	}
 	appendRes, err := eventStore.Append(ctx, tx, store.Exact(res.StreamVersion), ev)
 	if err != nil {
-		log.Fatalf("Append v5 failed: %v", err)
+		return 0, fmt.Errorf("append v5: %w", err)
 	}
 
-	// Update domain state and save snapshot at new stream version
 	user := res.State
 	user.Email = "alice.smith.hq@example.com"
-	err = repo.Save(ctx, tx, userID, appendRes.ToVersion(), user)
-	if err != nil {
-		log.Fatalf("Save snapshot failed: %v", err)
+	if err := repo.Save(ctx, tx, userID, appendRes.ToVersion(), user); err != nil {
+		return 0, fmt.Errorf("save snapshot: %w", err)
 	}
-	_ = tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit snapshot: %w", err)
+	}
+
 	fmt.Printf("Snapshot saved successfully at version %d with updated state: %+v\n", appendRes.ToVersion(), user)
+	return appendRes.ToVersion(), nil
+}
 
-	// --- Step 5: Add more events (v6 & v7) ---
+func stepAppendNameChanges(ctx context.Context, db *pgxpool.Pool, eventStore *storepostgres.Store, userID string, currVer int64) (int64, error) {
 	fmt.Println("\n--- Step 5: Appending events (v6 & v7) without taking a snapshot ---")
-	tx, err = db.Begin(ctx)
+	tx, err := db.Begin(ctx)
 	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
+		return 0, fmt.Errorf("begin tx: %w", err)
 	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback after commit or failure
+		_ = tx.Rollback(ctx)
+	}()
 
-	names := []string{"Alice S.", "Alice Smith"}
-	currVer = appendRes.ToVersion()
-	for _, name := range names {
-		payload, _ = json.Marshal(UserNameChanged{Name: name})
+	for _, name := range []string{"Alice S.", "Alice Smith"} {
+		payload, marshalErr := json.Marshal(UserNameChanged{Name: name})
+		if marshalErr != nil {
+			return 0, fmt.Errorf("marshal UserNameChanged: %w", marshalErr)
+		}
 		ev := []store.Event{
 			{
 				StreamType: "User",
@@ -235,79 +316,72 @@ func main() {
 				CreatedAt:  time.Now(),
 			},
 		}
-		resAppend, err := eventStore.Append(ctx, tx, store.Exact(currVer), ev)
-		if err != nil {
-			log.Fatalf("Append failed: %v", err)
+		resAppend, appendErr := eventStore.Append(ctx, tx, store.Exact(currVer), ev)
+		if appendErr != nil {
+			return 0, fmt.Errorf("append name change: %w", appendErr)
 		}
 		currVer = resAppend.ToVersion()
 	}
-	_ = tx.Commit(ctx)
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit name changes: %w", err)
+	}
 	fmt.Printf("User is now at version: %d (snapshot remains at v5)\n", currVer)
-
-	// --- Step 6: Load stream (should hit snapshot v5 and only replay v6 & v7) ---
-	fmt.Println("\n--- Step 6: Loading User (should use snapshot v5 and only replay v6 & v7) ---")
-	tx, err = db.Begin(ctx)
-	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
-	}
-
-	res, err = repo.Load(ctx, tx, userID)
-	if err != nil {
-		log.Fatalf("Load failed: %v", err)
-	}
-	_ = tx.Rollback(ctx)
-
-	fmt.Printf("Rehydrated state: %+v, final version: %d (snapshot hit: %v, replayed: %d)\n", res.State, res.StreamVersion, res.SnapshotHit, res.EventsReplayed)
-
-	// --- Step 7: Simulate Schema Migration (SchemaVersion bumped to 2) ---
-	fmt.Println("\n--- Step 7: Simulating Schema Version Mismatch (bumping SchemaVersion to 2) ---")
-	// We create a new repository with SchemaVersion 2
-	repoConfig.SchemaVersion = 2
-	repo2, _ := snapshot.NewRepository(eventStore, snapshotStore, repoConfig)
-
-	tx, err = db.Begin(ctx)
-	if err != nil {
-		log.Fatalf("Failed to begin tx: %v", err)
-	}
-
-	// This load should detect that the stored snapshot has SchemaVersion 1,
-	// discard it, and replay all events (v1 -> v7) from scratch.
-	res, err = repo2.Load(ctx, tx, userID)
-	if err != nil {
-		log.Fatalf("Load with schema v2 failed: %v", err)
-	}
-	_ = tx.Rollback(ctx)
-
-	fmt.Printf("Rehydrated state (all replayed): %+v, final version: %d (snapshot hit: %v, replayed: %d)\n", res.State, res.StreamVersion, res.SnapshotHit, res.EventsReplayed)
+	return currVer, nil
 }
 
-func setupTables(ctx context.Context, db *pgxpool.Pool) {
-	// DDL schema for events and stream_heads (from store migrations)
-	eventStoreSchema := `
-	CREATE TABLE IF NOT EXISTS events (
-		global_position BIGSERIAL PRIMARY KEY,
-		stream_type TEXT NOT NULL,
-		stream_id TEXT NOT NULL,
-		stream_version BIGINT NOT NULL,
-		event_id UUID NOT NULL UNIQUE,
-		event_type TEXT NOT NULL,
-		event_version INT NOT NULL DEFAULT 1,
-		payload BYTEA NOT NULL,
-		trace_id TEXT,
-		correlation_id TEXT,
-		causation_id TEXT,
-		metadata JSONB,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		UNIQUE (stream_type, stream_id, stream_version)
-	);
-	CREATE TABLE IF NOT EXISTS stream_heads (
-		stream_type TEXT NOT NULL,
-		stream_id TEXT NOT NULL,
-		stream_version BIGINT NOT NULL,
-		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		PRIMARY KEY (stream_type, stream_id)
-	);
-	`
+func stepVerifySnapshotHit(ctx context.Context, db *pgxpool.Pool, repo *snapshot.Repository[*User], userID string, expectedVer int64) error {
+	fmt.Println("\n--- Step 6: Loading User (should use snapshot v5 and only replay v6 & v7) ---")
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback on read-only tx
+		_ = tx.Rollback(ctx)
+	}()
+
+	res, err := repo.Load(ctx, tx, userID)
+	if err != nil {
+		return fmt.Errorf("load from snapshot: %w", err)
+	}
+
+	fmt.Printf("Rehydrated state: %+v, final version: %d (snapshot hit: %v, replayed: %d, expected: %d)\n",
+		res.State, res.StreamVersion, res.SnapshotHit, res.EventsReplayed, expectedVer)
+	return nil
+}
+
+func stepSimulateSchemaMigration(ctx context.Context, db *pgxpool.Pool, eventStore *storepostgres.Store, snapshotStore *snapshotpostgres.Store, userID string) error {
+	fmt.Println("\n--- Step 7: Simulating Schema Version Mismatch (bumping SchemaVersion to 2) ---")
+	repo2, err := snapshot.NewRepository(eventStore, snapshotStore, newUserRepoConfig(2))
+	if err != nil {
+		return fmt.Errorf("create v2 snapshot repository: %w", err)
+	}
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		//nolint:errcheck // best-effort rollback on read-only tx
+		_ = tx.Rollback(ctx)
+	}()
+
+	res, err := repo2.Load(ctx, tx, userID)
+	if err != nil {
+		return fmt.Errorf("load with schema v2: %w", err)
+	}
+
+	fmt.Printf("Rehydrated state (all replayed): %+v, final version: %d (snapshot hit: %v, replayed: %d)\n",
+		res.State, res.StreamVersion, res.SnapshotHit, res.EventsReplayed)
+	return nil
+}
+
+func setupTables(ctx context.Context, db *pgxpool.Pool) error {
+	eventStoreSchema, err := storemigrations.SQL(&storemigrations.Config{})
+	if err != nil {
+		return fmt.Errorf("generate event store schema: %w", err)
+	}
 
 	// DDL schema for snapshots
 	snapshotSchema := `
@@ -326,27 +400,33 @@ func setupTables(ctx context.Context, db *pgxpool.Pool) {
 
 	tx, err := db.Begin(ctx)
 	if err != nil {
-		log.Fatalf("Failed to begin setup tx: %v", err)
+		return fmt.Errorf("begin setup tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		//nolint:errcheck // best-effort rollback after commit or failure
+		_ = tx.Rollback(ctx)
+	}()
 
-	_, err = tx.Exec(ctx, eventStoreSchema)
-	if err != nil {
-		log.Fatalf("Failed to create event store tables: %v", err)
+	if _, err := tx.Exec(ctx, eventStoreSchema); err != nil {
+		return fmt.Errorf("create event store tables: %w", err)
 	}
-
-	_, err = tx.Exec(ctx, snapshotSchema)
-	if err != nil {
-		log.Fatalf("Failed to create snapshot tables: %v", err)
+	if _, err := tx.Exec(ctx, snapshotSchema); err != nil {
+		return fmt.Errorf("create snapshot tables: %w", err)
 	}
 
 	// Clean up any old data for this example run
-	_, _ = tx.Exec(ctx, "TRUNCATE TABLE events CASCADE;")
-	_, _ = tx.Exec(ctx, "TRUNCATE TABLE stream_heads CASCADE;")
-	_, _ = tx.Exec(ctx, "TRUNCATE TABLE snapshots CASCADE;")
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		log.Fatalf("Failed to commit setup: %v", err)
+	for _, stmt := range []string{
+		"TRUNCATE TABLE events CASCADE;",
+		"TRUNCATE TABLE stream_heads CASCADE;",
+		"TRUNCATE TABLE snapshots CASCADE;",
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("truncate table: %w", err)
+		}
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit setup: %w", err)
+	}
+	return nil
 }

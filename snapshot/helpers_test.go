@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/snapshot"
+	"eventsalsa.dev/store"
+
+	"eventsalsa.dev/snapshot"
 )
 
 type userState struct {

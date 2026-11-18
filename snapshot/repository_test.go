@@ -9,9 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 
-	"github.com/eventsalsa/snapshot"
+	"eventsalsa.dev/snapshot"
 )
 
 func TestNewRepository_Validation(t *testing.T) {

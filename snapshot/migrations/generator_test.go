@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eventsalsa/snapshot/migrations"
+	"eventsalsa.dev/snapshot/migrations"
 )
 
 func TestDefaultConfig(t *testing.T) {

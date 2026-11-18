@@ -1,5 +1,7 @@
 # Changelog
 
+> **Monorepo Cutover (`v0.0.2`+):** After `0.0.1`, `snapshot` moved from `github.com/eventsalsa/snapshot` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/snapshot`. Historical entries below are preserved from the original repository.
+
 ## 0.0.1 (2026-09-20)
 
 

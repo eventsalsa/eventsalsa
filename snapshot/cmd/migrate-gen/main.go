@@ -2,11 +2,11 @@
 //
 // Usage:
 //
-//	go run github.com/eventsalsa/snapshot/cmd/migrate-gen -output migrations -filename init.sql
+//	go run eventsalsa.dev/snapshot/cmd/migrate-gen -output migrations -filename init.sql
 //
 // Or with go generate:
 //
-//	//go:generate go run github.com/eventsalsa/snapshot/cmd/migrate-gen -output migrations
+//	//go:generate go run eventsalsa.dev/snapshot/cmd/migrate-gen -output migrations
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/eventsalsa/snapshot/migrations"
+	"eventsalsa.dev/snapshot/migrations"
 )
 
 func main() {

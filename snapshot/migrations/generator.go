@@ -33,7 +33,7 @@ func DefaultConfig() Config {
 // GeneratePostgres generates a PostgreSQL migration file.
 func GeneratePostgres(config *Config) error {
 	// Ensure output folder exists
-	if err := os.MkdirAll(config.OutputFolder, 0o755); err != nil {
+	if err := os.MkdirAll(config.OutputFolder, 0o750); err != nil {
 		return fmt.Errorf("failed to create output folder: %w", err)
 	}
 

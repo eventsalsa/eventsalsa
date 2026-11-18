@@ -3,7 +3,7 @@ package snapshot_test
 import (
 	"testing"
 
-	"github.com/eventsalsa/snapshot"
+	"eventsalsa.dev/snapshot"
 )
 
 func TestSnapshotPolicy(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/snapshot"
+	"eventsalsa.dev/snapshot"
 )
 
 func TestSnapshot_Fields(t *testing.T) {

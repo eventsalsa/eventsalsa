@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,8 +15,12 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/eventsalsa/snapshot"
-	snapshotpostgres "github.com/eventsalsa/snapshot/postgres"
+	"eventsalsa.dev/store"
+	storemigrations "eventsalsa.dev/store/migrations"
+	storepostgres "eventsalsa.dev/store/postgres"
+
+	"eventsalsa.dev/snapshot"
+	snapshotpostgres "eventsalsa.dev/snapshot/postgres"
 )
 
 // TestUser is the stream state model used for testing.
@@ -68,32 +70,11 @@ func setupPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	// Create tables for the event store
-	eventStoreDDL := `
-	CREATE TABLE IF NOT EXISTS events (
-		global_position BIGSERIAL PRIMARY KEY,
-		stream_type TEXT NOT NULL,
-		stream_id TEXT NOT NULL,
-		stream_version BIGINT NOT NULL,
-		event_id UUID NOT NULL UNIQUE,
-		event_type TEXT NOT NULL,
-		event_version INT NOT NULL DEFAULT 1,
-		payload BYTEA NOT NULL,
-		trace_id TEXT,
-		correlation_id TEXT,
-		causation_id TEXT,
-		metadata JSONB,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		UNIQUE (stream_type, stream_id, stream_version)
-	);
-	CREATE TABLE IF NOT EXISTS stream_heads (
-		stream_type TEXT NOT NULL,
-		stream_id TEXT NOT NULL,
-		stream_version BIGINT NOT NULL,
-		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		PRIMARY KEY (stream_type, stream_id)
-	);
-	`
+	// Create tables for the event store using the canonical store migration generator.
+	eventStoreDDL, err := storemigrations.SQL(&storemigrations.Config{})
+	if err != nil {
+		t.Fatalf("generate event store DDL: %v", err)
+	}
 	// Create tables for snapshots
 	snapshotDDL := `
 	CREATE TABLE IF NOT EXISTS snapshots (

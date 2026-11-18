@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	snapshotpostgres "github.com/eventsalsa/snapshot/postgres"
+	snapshotpostgres "eventsalsa.dev/snapshot/postgres"
 )
 
 type testLogger struct {

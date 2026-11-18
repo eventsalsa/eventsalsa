@@ -1,11 +1,11 @@
 # eventsalsa/snapshot
 
-[![CI](https://github.com/eventsalsa/snapshot/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/snapshot/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/eventsalsa/snapshot.svg)](https://pkg.go.dev/github.com/eventsalsa/snapshot)
+[![CI](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/eventsalsa.dev/snapshot.svg)](https://pkg.go.dev/eventsalsa.dev/snapshot)
 
-`github.com/eventsalsa/snapshot` is a generic, PostgreSQL-backed stream state snapshotting module for Go event-sourced applications. 
+`eventsalsa.dev/snapshot` is a generic, PostgreSQL-backed stream state snapshotting module for Go event-sourced applications. 
 
-It is designed to be used alongside [`github.com/eventsalsa/store`](https://github.com/eventsalsa/store). By saving a snapshot of the stream state at a specific version, you avoid reading the full stream of events from version 1. The repository loads the latest snapshot, reads only subsequent events (the delta), and applies them to reconstruct the active state.
+It is designed to be used alongside [`eventsalsa.dev/store`](https://github.com/eventsalsa/eventsalsa/tree/main/store). By saving a snapshot of the stream state at a specific version, you avoid reading the full stream of events from version 1. The repository loads the latest snapshot, reads only subsequent events (the delta), and applies them to reconstruct the active state.
 
 ## Features
 
@@ -24,7 +24,7 @@ It is designed to be used alongside [`github.com/eventsalsa/store`](https://gith
 ## Installation
 
 ```bash
-go get github.com/eventsalsa/snapshot
+go get eventsalsa.dev/snapshot
 ```
 
 ---
@@ -36,7 +36,7 @@ go get github.com/eventsalsa/snapshot
 Use the CLI tool to generate the migration file containing the DDL for the `snapshots` table:
 
 ```bash
-go run github.com/eventsalsa/snapshot/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/snapshot/cmd/migrate-gen -output migrations
 ```
 
 This generates a file named like `migrations/<timestamp>_init_snapshots.sql`:
@@ -76,10 +76,10 @@ Initialize the event store, snapshot store, and the generic snapshot repository:
 import (
 	"context"
 
-	"github.com/eventsalsa/snapshot"
-	snapshotpostgres "github.com/eventsalsa/snapshot/postgres"
-	"github.com/eventsalsa/store"
-	storepostgres "github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/snapshot"
+	snapshotpostgres "eventsalsa.dev/snapshot/postgres"
+	"eventsalsa.dev/store"
+	storepostgres "eventsalsa.dev/store/postgres"
 )
 
 // 1. Create the stores (normally singletons in your application)
@@ -113,7 +113,7 @@ userRepo, err := snapshot.NewRepository(eventStore, snapshotStore, config)
 ```
 
 > [!TIP]
-> **Domain Purity with Codegen**: To avoid manual unmarshaling and type switches in `Apply`, use [`eventsalsa/store/cmd/eventmap-gen`](https://github.com/eventsalsa/store/tree/main/cmd/eventmap-gen). It generates type-safe mappings between `store.PersistedEvent` and your typed domain events (`ToESEvents` and `FromESEvents[T]`), keeping your domain layer clean and decoupled from store infrastructure.
+> **Domain Purity with Codegen**: To avoid manual unmarshaling and type switches in `Apply`, use [`eventsalsa/store/cmd/eventmap-gen`](https://github.com/eventsalsa/eventsalsa/tree/main/store/cmd/eventmap-gen). It generates type-safe mappings between `store.PersistedEvent` and your typed domain events (`ToESEvents` and `FromESEvents[T]`), keeping your domain layer clean and decoupled from store infrastructure.
 
 > [!NOTE]
 > **Stream Type Matching**: Streams are partitioned by `StreamType`. If `StreamType` in `RepositoryConfig` does not match the type used when events were written, `Load` will find 0 events and 0 snapshots and will return the initialized state at version 0 (empty stream semantics) without returning an error. Ensure the configured `StreamType` matches your event store writer configuration.

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/eventsalsa/store"
 	"github.com/jackc/pgx/v5"
+
+	"eventsalsa.dev/store"
 )
 
 // RepositoryConfig contains configuration for the generic Repository.
@@ -22,7 +23,7 @@ type RepositoryConfig[T any] struct {
 
 	// Apply folds an event from the event store into state T.
 	// Tip: To keep domain aggregates decoupled from store.PersistedEvent and auto-generate
-	// type-safe event mapping code, use github.com/eventsalsa/store/cmd/eventmap-gen.
+	// type-safe event mapping code, use eventsalsa.dev/store/cmd/eventmap-gen.
 	Apply func(state T, event store.PersistedEvent) (T, error)
 
 	// Version optionally extracts the internal stream version from state T.

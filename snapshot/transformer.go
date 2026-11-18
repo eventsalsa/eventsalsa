@@ -55,11 +55,14 @@ func (g *gzipTransformer) Restore(_ context.Context, payload []byte) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("gzip new reader failed: %w", err)
 	}
-	defer r.Close()
 
-	decompressed, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("gzip read failed: %w", err)
+	decompressed, readErr := io.ReadAll(r)
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("gzip read failed: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("gzip close failed: %w", closeErr)
 	}
 	return decompressed, nil
 }
