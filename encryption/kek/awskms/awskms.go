@@ -9,8 +9,9 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
 )
 
 // DefaultContextKey is the default AWS KMS EncryptionContext map key used to

@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/awskms"
-	"github.com/eventsalsa/encryption/kek/local"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/awskms"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 type mockKMSClient struct {
@@ -219,9 +220,18 @@ func TestNativeReEncryptAndCrossProviderFallback(t *testing.T) {
 	keyARN2 := "arn:aws:kms:us-east-1:111122223333:key/k2"
 	client := newMockKMSClient(t, keyARN1, keyARN2)
 
-	w1, _ := awskms.NewWrapper(client, keyARN1)
-	w2, _ := awskms.NewWrapper(client, keyARN2)
-	localW, _ := local.NewWrapper("local-1", make([]byte, 32))
+	w1, err := awskms.NewWrapper(client, keyARN1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2, err := awskms.NewWrapper(client, keyARN2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localW, err := local.NewWrapper("local-1", make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	kr, err := kek.NewKeyring(keyARN2, w1, w2, localW)
 	if err != nil {

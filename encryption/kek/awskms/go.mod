@@ -1,10 +1,10 @@
-module github.com/eventsalsa/encryption/kek/awskms
+module eventsalsa.dev/encryption/kek/awskms
 
-go 1.26.0
+go 1.27.4
 
 require (
+	eventsalsa.dev/encryption v0.1.0
 	github.com/aws/aws-sdk-go-v2/service/kms v1.41.0
-	github.com/eventsalsa/encryption v0.0.0
 )
 
 require (
@@ -13,5 +13,3 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.35 // indirect
 	github.com/aws/smithy-go v1.22.2 // indirect
 )
-
-replace github.com/eventsalsa/encryption => ../..
