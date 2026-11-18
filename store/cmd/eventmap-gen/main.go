@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	go run github.com/eventsalsa/store/cmd/eventmap-gen \
+//	go run eventsalsa.dev/store/cmd/eventmap-gen \
 //	  -input internal/core/component/user/domain/user/events \
 //	  -output internal/infrastructure/component/user/persistence/es/generated
 //
@@ -48,7 +48,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/eventsalsa/store/eventmap"
+	"eventsalsa.dev/store/eventmap"
 )
 
 func main() {
@@ -132,14 +132,8 @@ func main() {
 func detectModulePath(startDir string) (string, error) {
 	dir := startDir
 	for {
-		goModPath := filepath.Join(dir, "go.mod")
-		if _, err := os.Stat(goModPath); err == nil {
-			// Found go.mod, read module path
-			content, err := os.ReadFile(goModPath)
-			if err != nil {
-				return "", fmt.Errorf("failed to read go.mod: %w", err)
-			}
-
+		content, err := readGoModInDir(dir)
+		if err == nil {
 			// Extract module path from first line
 			lines := string(content)
 			if len(lines) > 7 && lines[:7] == "module " {
@@ -150,8 +144,8 @@ func detectModulePath(startDir string) (string, error) {
 				modulePath := lines[7:endIdx]
 
 				// Build import path relative to module root
-				relPath, err := filepath.Rel(dir, startDir)
-				if err != nil {
+				relPath, relErr := filepath.Rel(dir, startDir)
+				if relErr != nil {
 					return modulePath, nil
 				}
 
@@ -175,4 +169,17 @@ func detectModulePath(startDir string) (string, error) {
 	}
 
 	return "", fmt.Errorf("go.mod not found")
+}
+
+func readGoModInDir(dir string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		//nolint:errcheck // best-effort close on read-only directory root
+		_ = root.Close()
+	}()
+
+	return root.ReadFile("go.mod")
 }

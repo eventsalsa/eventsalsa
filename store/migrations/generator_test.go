@@ -35,6 +35,7 @@ func TestGeneratePostgres(t *testing.T) {
 	requiredStrings := []string{
 		"CREATE TABLE IF NOT EXISTS events",
 		"global_position BIGSERIAL PRIMARY KEY",
+		"transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id()",
 		"stream_type TEXT NOT NULL",
 		"stream_id TEXT NOT NULL",
 		"stream_version BIGINT NOT NULL",
@@ -62,6 +63,7 @@ func TestGeneratePostgres(t *testing.T) {
 		"idx_events_event_type",
 		"idx_events_correlation",
 		"idx_events_stream_type_position",
+		"idx_events_transaction_position",
 	}
 
 	for _, idx := range requiredIndexes {
@@ -309,4 +311,96 @@ func TestGeneratePostgres_Partman_Manual(t *testing.T) {
 	if !strings.Contains(sql, "CALL partman.run_maintenance_proc();") {
 		t.Error("Missing manual CALL partman.run_maintenance_proc() instruction")
 	}
+}
+
+func TestSQL_TransactionIDAndSchemaPrefix(t *testing.T) {
+	t.Run("unpartitioned schema-qualified", func(t *testing.T) {
+		sql, err := SQL(&Config{
+			EventsTable:      "ordering.events",
+			StreamHeadsTable: "ordering.stream_heads",
+		})
+		if err != nil {
+			t.Fatalf("SQL failed: %v", err)
+		}
+
+		for _, want := range []string{
+			"CREATE SCHEMA IF NOT EXISTS ordering;",
+			"transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),",
+			"CREATE INDEX IF NOT EXISTS idx_events_stream \n    ON ordering.events",
+			"CREATE INDEX IF NOT EXISTS idx_events_transaction_position \n    ON ordering.events (transaction_id, global_position);",
+			"CREATE INDEX IF NOT EXISTS idx_stream_heads_updated \n    ON ordering.stream_heads (updated_at);",
+		} {
+			if !strings.Contains(sql, want) {
+				t.Errorf("missing %q in generated SQL:\n%s", want, sql)
+			}
+		}
+
+		for _, unwanted := range []string{
+			"idx_ordering.events",
+			"idx_ordering.stream_heads",
+		} {
+			if strings.Contains(sql, unwanted) {
+				t.Errorf("generated SQL must not contain schema-prefixed index name %q:\n%s", unwanted, sql)
+			}
+		}
+	})
+
+	t.Run("native partitioned schema-qualified", func(t *testing.T) {
+		sql, err := SQL(&Config{
+			EventsTable:      "ordering.events",
+			StreamHeadsTable: "ordering.stream_heads",
+			Partitioning: PartitionConfig{
+				Strategy:          PartitionStrategyNative,
+				PartitionSize:     1000,
+				InitialPartitions: 2,
+			},
+		})
+		if err != nil {
+			t.Fatalf("SQL failed: %v", err)
+		}
+
+		for _, want := range []string{
+			"CREATE SCHEMA IF NOT EXISTS ordering;",
+			"transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),",
+			"CREATE INDEX IF NOT EXISTS idx_events_transaction_position \n    ON ordering.events (transaction_id, global_position);",
+			"CREATE INDEX IF NOT EXISTS idx_stream_heads_updated \n    ON ordering.stream_heads (updated_at);",
+			"PARTITION OF ordering.events",
+		} {
+			if !strings.Contains(sql, want) {
+				t.Errorf("missing %q in native partitioned SQL:\n%s", want, sql)
+			}
+		}
+
+		if strings.Contains(sql, "idx_ordering.") {
+			t.Errorf("native partitioned SQL must not contain schema-prefixed index name:\n%s", sql)
+		}
+	})
+
+	t.Run("partman schema-qualified", func(t *testing.T) {
+		sql, err := SQL(&Config{
+			EventsTable:      "ordering.events",
+			StreamHeadsTable: "ordering.stream_heads",
+			Partitioning: PartitionConfig{
+				Strategy: PartitionStrategyPartman,
+			},
+		})
+		if err != nil {
+			t.Fatalf("SQL failed: %v", err)
+		}
+
+		for _, want := range []string{
+			"CREATE SCHEMA IF NOT EXISTS ordering;",
+			"transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),",
+			"CREATE INDEX IF NOT EXISTS idx_events_transaction_position \n    ON ordering.events (transaction_id, global_position);",
+			"p_parent_table => 'ordering.events'",
+		} {
+			if !strings.Contains(sql, want) {
+				t.Errorf("missing %q in partman SQL:\n%s", want, sql)
+			}
+		}
+
+		if strings.Contains(sql, "idx_ordering.") {
+			t.Errorf("partman SQL must not contain schema-prefixed index name:\n%s", sql)
+		}
+	})
 }

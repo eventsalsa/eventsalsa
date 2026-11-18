@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 // TestNoOpLogger verifies the NoOpLogger doesn't panic.

@@ -95,14 +95,19 @@ func DefaultConfig() Config {
 
 // GeneratePostgres generates a PostgreSQL migration file.
 func GeneratePostgres(config *Config) error {
+	normalized := normalizeConfig(config)
+
 	// Ensure output folder exists
-	if err := os.MkdirAll(config.OutputFolder, 0o755); err != nil {
+	if err := os.MkdirAll(normalized.OutputFolder, 0o750); err != nil {
 		return fmt.Errorf("failed to create output folder: %w", err)
 	}
 
-	sql := generatePostgresSQL(config)
+	sql, err := SQL(&normalized)
+	if err != nil {
+		return err
+	}
 
-	outputPath := filepath.Join(config.OutputFolder, config.OutputFilename)
+	outputPath := filepath.Join(normalized.OutputFolder, normalized.OutputFilename)
 	if err := os.WriteFile(outputPath, []byte(sql), 0o600); err != nil {
 		return fmt.Errorf("failed to write migration file: %w", err)
 	}
@@ -110,24 +115,68 @@ func GeneratePostgres(config *Config) error {
 	return nil
 }
 
-func generatePostgresSQL(config *Config) string {
-	switch config.Partitioning.Strategy {
+// SQL returns the PostgreSQL migration DDL for the supplied configuration.
+func SQL(config *Config) (string, error) {
+	normalized := normalizeConfig(config)
+
+	switch normalized.Partitioning.Strategy {
 	case PartitionStrategyNative:
-		return generateNativePartitionedSQL(config)
+		return generateNativePartitionedSQL(&normalized), nil
 	case PartitionStrategyPartman:
-		return generatePartmanPartitionedSQL(config)
+		return generatePartmanPartitionedSQL(&normalized), nil
 	default:
-		return generateUnpartitionedSQL(config)
+		return generateUnpartitionedSQL(&normalized), nil
 	}
 }
 
+func normalizeConfig(config *Config) Config {
+	normalized := DefaultConfig()
+	if config == nil {
+		return normalized
+	}
+
+	if config.OutputFolder != "" {
+		normalized.OutputFolder = config.OutputFolder
+	}
+	if config.OutputFilename != "" {
+		normalized.OutputFilename = config.OutputFilename
+	}
+	if config.EventsTable != "" {
+		normalized.EventsTable = config.EventsTable
+	}
+	if config.StreamHeadsTable != "" {
+		normalized.StreamHeadsTable = config.StreamHeadsTable
+	}
+	if config.Partitioning.Strategy != "" {
+		normalized.Partitioning.Strategy = config.Partitioning.Strategy
+	}
+	if config.Partitioning.PartitionSize > 0 {
+		normalized.Partitioning.PartitionSize = config.Partitioning.PartitionSize
+	}
+	if config.Partitioning.InitialPartitions > 0 {
+		normalized.Partitioning.InitialPartitions = config.Partitioning.InitialPartitions
+	}
+	if config.Partitioning.PartmanSchema != "" {
+		normalized.Partitioning.PartmanSchema = config.Partitioning.PartmanSchema
+	}
+	if config.Partitioning.PartmanMaintenance != "" {
+		normalized.Partitioning.PartmanMaintenance = config.Partitioning.PartmanMaintenance
+	}
+
+	return normalized
+}
+
 func generateUnpartitionedSQL(config *Config) string {
+	eventsIdx := indexNameComponent(config.EventsTable)
+	streamHeadsIdx := indexNameComponent(config.StreamHeadsTable)
+
 	return fmt.Sprintf(`-- Event Sourcing Infrastructure Migration
 -- Generated: %s
 
--- Events table stores all domain events in append-only fashion
+%s-- Events table stores all domain events in append-only fashion
 CREATE TABLE IF NOT EXISTS %s (
     global_position BIGSERIAL PRIMARY KEY,
+    transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),
     stream_type TEXT NOT NULL,
     stream_id TEXT NOT NULL,
     stream_version BIGINT NOT NULL,
@@ -161,6 +210,10 @@ CREATE INDEX IF NOT EXISTS idx_%s_correlation
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
     ON %s (stream_type, global_position);
 
+-- Index for transaction-ordered / snapshot-aware reads
+CREATE INDEX IF NOT EXISTS idx_%s_transaction_position 
+    ON %s (transaction_id, global_position);
+
 -- Stream heads table tracks the current version of each stream
 -- Provides O(1) version lookup for event append operations
 -- Primary key (stream_type, stream_id) ensures one row per stream
@@ -178,13 +231,15 @@ CREATE INDEX IF NOT EXISTS idx_%s_updated
     ON %s (updated_at);
 `,
 		time.Now().Format(time.RFC3339),
+		schemaStatements(config.EventsTable, config.StreamHeadsTable),
 		config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
 		config.StreamHeadsTable,
-		config.StreamHeadsTable, config.StreamHeadsTable,
+		streamHeadsIdx, config.StreamHeadsTable,
 	)
 }
 
@@ -199,16 +254,20 @@ func generateNativePartitionedSQL(config *Config) string {
 		initialPartitions = 4
 	}
 
+	eventsIdx := indexNameComponent(config.EventsTable)
+	streamHeadsIdx := indexNameComponent(config.StreamHeadsTable)
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, `-- Event Sourcing Infrastructure Migration (Native RANGE Partitioned)
 -- Generated: %s
 
--- Sequence for global_position across partitions
+%s-- Sequence for global_position across partitions
 CREATE SEQUENCE IF NOT EXISTS %s_global_position_seq;
 
 -- Partitioned events table by global_position RANGE
 CREATE TABLE IF NOT EXISTS %s (
     global_position BIGINT NOT NULL DEFAULT nextval('%s_global_position_seq'),
+    transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),
     stream_type TEXT NOT NULL,
     stream_id TEXT NOT NULL,
     stream_version BIGINT NOT NULL,
@@ -226,6 +285,7 @@ CREATE TABLE IF NOT EXISTS %s (
 ) PARTITION BY RANGE (global_position);
 `,
 		time.Now().Format(time.RFC3339),
+		schemaStatements(config.EventsTable, config.StreamHeadsTable),
 		config.EventsTable,
 		config.EventsTable,
 		config.EventsTable,
@@ -254,6 +314,9 @@ CREATE INDEX IF NOT EXISTS idx_%s_correlation
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
     ON %s (stream_type, global_position);
 
+CREATE INDEX IF NOT EXISTS idx_%s_transaction_position 
+    ON %s (transaction_id, global_position);
+
 -- Stream heads table tracks the current version of each stream
 CREATE TABLE IF NOT EXISTS %s (
     stream_type TEXT NOT NULL,
@@ -267,12 +330,13 @@ CREATE TABLE IF NOT EXISTS %s (
 CREATE INDEX IF NOT EXISTS idx_%s_updated 
     ON %s (updated_at);
 `,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
 		config.StreamHeadsTable,
-		config.StreamHeadsTable, config.StreamHeadsTable,
+		streamHeadsIdx, config.StreamHeadsTable,
 	)
 
 	return sb.String()
@@ -299,6 +363,9 @@ func generatePartmanPartitionedSQL(config *Config) string {
 		parentTable = "public." + parentTable
 	}
 
+	eventsIdx := indexNameComponent(config.EventsTable)
+	streamHeadsIdx := indexNameComponent(config.StreamHeadsTable)
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, `-- Event Sourcing Infrastructure Migration (pg_partman Managed)
 -- Generated: %s
@@ -307,12 +374,13 @@ func generatePartmanPartitionedSQL(config *Config) string {
 CREATE SCHEMA IF NOT EXISTS %s;
 CREATE EXTENSION IF NOT EXISTS pg_partman WITH SCHEMA %s;
 
--- Sequence for global_position across partitions
+%s-- Sequence for global_position across partitions
 CREATE SEQUENCE IF NOT EXISTS %s_global_position_seq;
 
 -- Partitioned events table by global_position RANGE
 CREATE TABLE IF NOT EXISTS %s (
     global_position BIGINT NOT NULL DEFAULT nextval('%s_global_position_seq'),
+    transaction_id xid8 NOT NULL DEFAULT pg_current_xact_id(),
     stream_type TEXT NOT NULL,
     stream_id TEXT NOT NULL,
     stream_version BIGINT NOT NULL,
@@ -332,6 +400,7 @@ CREATE TABLE IF NOT EXISTS %s (
 		time.Now().Format(time.RFC3339),
 		partmanSchema,
 		partmanSchema,
+		schemaStatements(config.EventsTable, config.StreamHeadsTable),
 		config.EventsTable,
 		config.EventsTable,
 		config.EventsTable,
@@ -350,6 +419,9 @@ CREATE INDEX IF NOT EXISTS idx_%s_correlation
 
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
     ON %s (stream_type, global_position);
+
+CREATE INDEX IF NOT EXISTS idx_%s_transaction_position 
+    ON %s (transaction_id, global_position);
 
 -- Stream heads table tracks the current version of each stream
 CREATE TABLE IF NOT EXISTS %s (
@@ -373,12 +445,13 @@ SELECT %s.create_parent(
     p_premake => %d
 );
 `,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
-		config.EventsTable, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
+		eventsIdx, config.EventsTable,
 		config.StreamHeadsTable,
-		config.StreamHeadsTable, config.StreamHeadsTable,
+		streamHeadsIdx, config.StreamHeadsTable,
 		partmanSchema,
 		parentTable,
 		partitionSize,
@@ -412,4 +485,49 @@ SELECT cron.schedule('partman-maintenance-%s', '0 * * * *', $$CALL %s.run_mainte
 	}
 
 	return sb.String()
+}
+
+func schemaStatements(tableNames ...string) string {
+	seen := make(map[string]struct{})
+	var statements []string
+
+	for _, tableName := range tableNames {
+		schema := schemaName(tableName)
+		if schema == "" {
+			continue
+		}
+		if _, ok := seen[schema]; ok {
+			continue
+		}
+
+		seen[schema] = struct{}{}
+		statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s;\n", schema))
+	}
+
+	if len(statements) == 0 {
+		return ""
+	}
+
+	return strings.Join(statements, "") + "\n"
+}
+
+func schemaName(tableName string) string {
+	if idx := strings.LastIndex(tableName, "."); idx >= 0 {
+		return tableName[:idx]
+	}
+
+	return ""
+}
+
+func indexNameComponent(tableName string) string {
+	base := tableName
+	if idx := strings.LastIndex(base, "."); idx >= 0 {
+		base = base[idx+1:]
+	}
+
+	base = strings.Trim(base, `"`)
+	base = strings.ReplaceAll(base, "-", "_")
+	base = strings.ReplaceAll(base, " ", "_")
+
+	return base
 }

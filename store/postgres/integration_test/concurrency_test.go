@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/postgres"
 )
 
 // TestConcurrent_NoStream verifies that when multiple concurrent goroutines

@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/postgres"
 )
 
 // TestProtocolMode_SimpleProtocolMode verifies end-to-end event append and read

@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 // StoreConfig contains configuration for the PostgreSQL event store.
@@ -154,7 +154,7 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 			payload, trace_id, correlation_id, causation_id,
 			metadata, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING global_position
+		RETURNING global_position, transaction_id
 	`, s.config.EventsTable)
 
 	for i := range events {
@@ -169,6 +169,7 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 		}
 
 		var globalPos int64
+		var txID uint64
 		err = tx.QueryRow(ctx, insertQuery,
 			event.StreamType,
 			event.StreamID,
@@ -182,7 +183,7 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 			event.CausationID,
 			metadata,
 			event.CreatedAt,
-		).Scan(&globalPos)
+		).Scan(&globalPos, &txID)
 
 		if err != nil {
 			if IsUniqueViolation(err) {
@@ -200,6 +201,7 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 
 		persistedEvents[i] = store.PersistedEvent{
 			GlobalPosition: globalPos,
+			TransactionID:  txID,
 			StreamType:     event.StreamType,
 			StreamID:       event.StreamID,
 			StreamVersion:  streamVersion,
@@ -372,6 +374,32 @@ func (s *Store) ReadEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, l
 	return s.readEvents(ctx, tx, fromPosition, limit)
 }
 
+const eventSelectColumns = `global_position, transaction_id, stream_type, stream_id, stream_version,
+			event_id, event_type, event_version,
+			payload, trace_id, correlation_id, causation_id,
+			metadata, created_at`
+
+func scanPersistedEvent(rows pgx.Rows) (store.PersistedEvent, error) {
+	var e store.PersistedEvent
+	err := rows.Scan(
+		&e.GlobalPosition,
+		&e.TransactionID,
+		&e.StreamType,
+		&e.StreamID,
+		&e.StreamVersion,
+		&e.EventID,
+		&e.EventType,
+		&e.EventVersion,
+		&e.Payload,
+		&e.TraceID,
+		&e.CorrelationID,
+		&e.CausationID,
+		&e.Metadata,
+		&e.CreatedAt,
+	)
+	return e, err
+}
+
 func (s *Store) readEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, limit int) ([]store.PersistedEvent, error) {
 	if s.config.Logger != nil {
 		s.config.Logger.Debug(ctx, "reading events", "from_position", fromPosition, "limit", limit)
@@ -386,24 +414,9 @@ func (s *Store) readEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, l
 
 	var events []store.PersistedEvent
 	for rows.Next() {
-		var e store.PersistedEvent
-		err := rows.Scan(
-			&e.GlobalPosition,
-			&e.StreamType,
-			&e.StreamID,
-			&e.StreamVersion,
-			&e.EventID,
-			&e.EventType,
-			&e.EventVersion,
-			&e.Payload,
-			&e.TraceID,
-			&e.CorrelationID,
-			&e.CausationID,
-			&e.Metadata,
-			&e.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan event: %w", err)
+		e, scanErr := scanPersistedEvent(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan event: %w", scanErr)
 		}
 		events = append(events, e)
 	}
@@ -426,13 +439,10 @@ func buildReadEventsQuery(
 ) (query string, args []any) {
 	query = fmt.Sprintf(`
 		SELECT 
-			global_position, stream_type, stream_id, stream_version,
-			event_id, event_type, event_version,
-			payload, trace_id, correlation_id, causation_id,
-			metadata, created_at
+			%s
 		FROM %s
 		WHERE global_position > $1
-	`, eventsTable)
+	`, eventSelectColumns, eventsTable)
 
 	query += "\n\t\tORDER BY global_position ASC\n\t\tLIMIT $2\n\t"
 	args = []any{fromPosition, limit}
@@ -475,13 +485,10 @@ func (s *Store) ReadStream(ctx context.Context, tx pgx.Tx, streamType, streamID 
 	//nolint:gosec // G201: table name from trusted config, not user input
 	baseQuery := fmt.Sprintf(`
 		SELECT 
-			global_position, stream_type, stream_id, stream_version,
-			event_id, event_type, event_version,
-			payload, trace_id, correlation_id, causation_id,
-			metadata, created_at
+			%s
 		FROM %s
 		WHERE stream_type = $1 AND stream_id = $2
-	`, s.config.EventsTable)
+	`, eventSelectColumns, s.config.EventsTable)
 
 	var args []any
 	args = append(args, streamType, streamID)
@@ -508,24 +515,9 @@ func (s *Store) ReadStream(ctx context.Context, tx pgx.Tx, streamType, streamID 
 
 	var events []store.PersistedEvent
 	for rows.Next() {
-		var e store.PersistedEvent
-		err := rows.Scan(
-			&e.GlobalPosition,
-			&e.StreamType,
-			&e.StreamID,
-			&e.StreamVersion,
-			&e.EventID,
-			&e.EventType,
-			&e.EventVersion,
-			&e.Payload,
-			&e.TraceID,
-			&e.CorrelationID,
-			&e.CausationID,
-			&e.Metadata,
-			&e.CreatedAt,
-		)
-		if err != nil {
-			return store.Stream{}, fmt.Errorf("failed to scan event: %w", err)
+		e, scanErr := scanPersistedEvent(rows)
+		if scanErr != nil {
+			return store.Stream{}, fmt.Errorf("failed to scan event: %w", scanErr)
 		}
 		events = append(events, e)
 	}

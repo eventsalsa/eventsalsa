@@ -4,7 +4,7 @@ This document defines the architecture, conventions, workflows, and skills used 
 
 ## Project Overview & Architecture
 
-`github.com/eventsalsa/store` is a professional-grade event store library for Go, designed with clean architecture principles. It provides minimal, production-ready infrastructure for persisting and reading domain events in an event-sourced system. State changes are stored as an ordered, immutable sequence of events in a PostgreSQL database.
+`eventsalsa.dev/store` is a professional-grade event store library for Go, designed with clean architecture principles. It provides minimal, production-ready infrastructure for persisting and reading domain events in an event-sourced system. State changes are stored as an ordered, immutable sequence of events in a PostgreSQL database.
 
 ### Core Concepts
 

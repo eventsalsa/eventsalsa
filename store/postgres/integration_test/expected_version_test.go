@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/postgres"
 )
 
 // TestExpectedVersion_NoStream tests that NoStream() enforces stream doesn't exist

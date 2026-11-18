@@ -7,10 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/eventsalsa/store"
-	v1 "github.com/eventsalsa/store/examples/eventmap-codegen/domain/user/events/v1"
-	v2 "github.com/eventsalsa/store/examples/eventmap-codegen/domain/user/events/v2"
-	"github.com/eventsalsa/store/examples/eventmap-codegen/infrastructure/persistence"
+	"eventsalsa.dev/store"
+	v1 "eventsalsa.dev/store/examples/eventmap-codegen/domain/user/events/v1"
+	v2 "eventsalsa.dev/store/examples/eventmap-codegen/domain/user/events/v2"
+	"eventsalsa.dev/store/examples/eventmap-codegen/infrastructure/persistence"
 )
 
 // UserProjection is an example projection that demonstrates using FromESEvent

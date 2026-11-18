@@ -1,5 +1,7 @@
 # Changelog
 
+> **Monorepo Cutover (`v0.3.0`+):** After `v0.2.0`, `store` moved from `github.com/eventsalsa/store` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under the vanity import path `eventsalsa.dev/store`. Historical entries below are preserved from the original repository.
+
 ## [0.2.0](https://github.com/eventsalsa/store/compare/v0.1.0...v0.2.0) (2026-08-21)
 
 

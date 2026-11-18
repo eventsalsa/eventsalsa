@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 )
 
 // Compile-time interface compliance checks.
@@ -42,6 +42,7 @@ func TestBuildReadEventsQuery(t *testing.T) {
 	normalized := strings.Join(strings.Fields(query), " ")
 
 	for _, want := range []string{
+		"SELECT global_position, transaction_id, stream_type",
 		"WHERE global_position > $1",
 		"ORDER BY global_position ASC",
 		"LIMIT $2",

@@ -81,21 +81,21 @@ type OrderShipped struct {
 	// Create go.mod for the test module
 	goModContent := `module testevents
 
-go 1.24
+go 1.27.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/eventsalsa/store v0.0.0
+	eventsalsa.dev/store v0.0.0
 )
 
-replace github.com/eventsalsa/store => ` + repoRoot + `
+replace eventsalsa.dev/store => ` + repoRoot + `
 `
-	if err = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goModContent), 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goModContent), 0o600); err != nil {
 		t.Fatalf("Failed to write go.mod: %v", err)
 	}
 
 	// Run go mod download to populate go.sum
-	downloadCmd := exec.Command("go", "mod", "download")
+	downloadCmd := exec.CommandContext(t.Context(), "go", "mod", "download")
 	downloadCmd.Dir = tmpDir
 	var downloadOutput []byte
 	if downloadOutput, err = downloadCmd.CombinedOutput(); err != nil {
@@ -104,12 +104,12 @@ replace github.com/eventsalsa/store => ` + repoRoot + `
 
 	// Generate the mapping code
 	outputDir := filepath.Join(tmpDir, "generated")
-	if err = os.MkdirAll(outputDir, 0o755); err != nil {
+	if err = os.MkdirAll(outputDir, 0o750); err != nil {
 		t.Fatalf("Failed to create output dir: %v", err)
 	}
 
 	// Run the eventmap-gen tool
-	cmd := exec.Command("go", "run", "github.com/eventsalsa/store/cmd/eventmap-gen",
+	cmd := exec.CommandContext(t.Context(), "go", "run", "eventsalsa.dev/store/cmd/eventmap-gen",
 		"-input", eventsDir,
 		"-output", outputDir,
 		"-package", "generated",
@@ -135,7 +135,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 	"testevents/events/v1"
 	"testevents/events/v2"
 )
@@ -462,12 +462,12 @@ func TestUnknownEventVersion(t *testing.T) {
 }
 `
 
-	if err = os.WriteFile(filepath.Join(outputDir, "integration_test.go"), []byte(testCode), 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(outputDir, "integration_test.go"), []byte(testCode), 0o600); err != nil {
 		t.Fatalf("Failed to write test code: %v", err)
 	}
 
 	// Run go mod tidy to populate go.sum with all dependencies
-	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd := exec.CommandContext(t.Context(), "go", "mod", "tidy")
 	tidyCmd.Dir = tmpDir
 	var tidyOutput []byte
 	if tidyOutput, err = tidyCmd.CombinedOutput(); err != nil {
@@ -475,7 +475,7 @@ func TestUnknownEventVersion(t *testing.T) {
 	}
 
 	// Run the generated tests
-	cmd = exec.Command("go", "test", "-v", "./generated")
+	cmd = exec.CommandContext(t.Context(), "go", "test", "-v", "./generated")
 	cmd.Dir = tmpDir
 	output, err = cmd.CombinedOutput()
 	t.Logf("Test output:\n%s", output)

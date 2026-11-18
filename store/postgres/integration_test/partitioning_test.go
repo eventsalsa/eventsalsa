@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/migrations"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/migrations"
+	"eventsalsa.dev/store/postgres"
 )
 
 // setupPartitionedTestTables sets up a partitioned PostgreSQL event store with small partition size.

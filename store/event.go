@@ -60,7 +60,7 @@ type Event struct {
 }
 
 // PersistedEvent represents an event that has been stored.
-// It includes the GlobalPosition and StreamVersion assigned by the event store.
+// It includes the GlobalPosition, TransactionID, and StreamVersion assigned by the event store.
 type PersistedEvent struct {
 	CreatedAt      time.Time
 	StreamType     string
@@ -73,6 +73,7 @@ type PersistedEvent struct {
 	TraceID        NullString
 	GlobalPosition int64
 	StreamVersion  int64
+	TransactionID  uint64
 	EventVersion   int
 	EventID        uuid.UUID
 }

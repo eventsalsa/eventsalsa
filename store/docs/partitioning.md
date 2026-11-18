@@ -24,7 +24,7 @@ Partitioning is strictly optional. By default, `cmd/migrate-gen` generates stand
 Native partitioning creates a sequence and pre-allocates a configured number of partition tables with zero-padded bounds.
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy native \
   -partition-size 10000000 \
@@ -48,7 +48,7 @@ For automated partition creation without manual intervention, `eventsalsa/store`
 #### Option A: Automated Maintenance with `pg_cron`
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance pg_cron \
@@ -75,7 +75,7 @@ SELECT cron.schedule('partman-maintenance-events', '0 * * * *', $$CALL partman.r
 #### Option B: Automated Maintenance with `pg_partman_bgw` (Background Worker)
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance bgw
@@ -92,7 +92,7 @@ pg_partman_bgw.dbname = 'mydb'
 #### Option C: External / Manual Maintenance
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance none

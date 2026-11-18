@@ -242,7 +242,7 @@ func (g *Generator) Generate() error {
 	})
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(g.config.OutputDir, 0o755); err != nil {
+	if err := os.MkdirAll(g.config.OutputDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -329,7 +329,7 @@ func (g *Generator) generateImports() string {
 	sb.WriteString("\t\"time\"\n")
 	sb.WriteString("\n")
 	sb.WriteString("\t\"github.com/google/uuid\"\n")
-	sb.WriteString("\t\"github.com/eventsalsa/store\"\n")
+	sb.WriteString("\t\"eventsalsa.dev/store\"\n")
 
 	// Add imports for domain event packages
 	importPaths := make(map[string]string)
@@ -683,7 +683,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/eventsalsa/store"
+	"eventsalsa.dev/store"
 `, g.config.PackageName)
 
 	// Add imports for domain event packages

@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eventsalsa/store"
-	"github.com/eventsalsa/store/postgres"
+	"eventsalsa.dev/store"
+	"eventsalsa.dev/store/postgres"
 )
 
 // TestNotify_AppendNotification verifies that when WithNotifyChannel is configured,

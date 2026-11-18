@@ -1,8 +1,8 @@
 # eventsalsa/store
 
-[![CI](https://github.com/eventsalsa/store/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/store/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/eventsalsa/store)](https://goreportcard.com/report/github.com/eventsalsa/store)
-[![GoDoc](https://godoc.org/github.com/eventsalsa/store?status.svg)](https://godoc.org/github.com/eventsalsa/store)
+[![CI](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml/badge.svg)](https://github.com/eventsalsa/eventsalsa/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/eventsalsa.dev/store)](https://goreportcard.com/report/eventsalsa.dev/store)
+[![GoDoc](https://pkg.go.dev/badge/eventsalsa.dev/store.svg)](https://pkg.go.dev/eventsalsa.dev/store)
 
 A minimal, production-ready event store for Go.
 
@@ -23,7 +23,7 @@ A minimal, production-ready event store for Go.
 ### 1. Install
 
 ```bash
-go get github.com/eventsalsa/store
+go get eventsalsa.dev/store
 ```
 
 Choose your PostgreSQL driver:
@@ -35,7 +35,7 @@ go get github.com/jackc/pgx/v5
 ### 2. Generate Migrations
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/store/cmd/migrate-gen -output migrations
 ```
 
 Apply the generated file with your preferred migration tool:
@@ -58,8 +58,8 @@ import (
     "github.com/google/uuid"
     "github.com/jackc/pgx/v5/pgxpool"
 
-    "github.com/eventsalsa/store"
-    "github.com/eventsalsa/store/postgres"
+    "eventsalsa.dev/store"
+    "eventsalsa.dev/store/postgres"
 )
 
 func main() {
@@ -145,7 +145,7 @@ event := store.Event{
 }
 ```
 
-`store.PersistedEvent` is what you read back. It adds `GlobalPosition` and `StreamVersion`.
+`store.PersistedEvent` is what you read back. It adds `GlobalPosition`, `TransactionID` (`xid8` PostgreSQL transaction ID), and `StreamVersion`.
 
 `store.Stream` wraps the full ordered history of a single stream along with helper methods:
 
@@ -280,14 +280,14 @@ Subscribers can `LISTEN` on the same channel to wake up immediately instead of p
 **Standard Tables (Default):**
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations
+go run eventsalsa.dev/store/cmd/migrate-gen -output migrations
 # writes migrations/20060102150405_init_event_sourcing.sql
 ```
 
 **Native Range Partitioning:**
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy native \
   -partition-size 10000000 \
@@ -297,7 +297,7 @@ go run github.com/eventsalsa/store/cmd/migrate-gen \
 **`pg_partman` Managed Partitioning:**
 
 ```bash
-go run github.com/eventsalsa/store/cmd/migrate-gen \
+go run eventsalsa.dev/store/cmd/migrate-gen \
   -output migrations \
   -partition-strategy partman \
   -partman-maintenance pg_cron
@@ -308,7 +308,7 @@ For full DBA guides, maintenance automation, and background worker (`pg_partman_
 **`go:generate`:**
 
 ```go
-//go:generate go run github.com/eventsalsa/store/cmd/migrate-gen -output migrations -filename init.sql
+//go:generate go run eventsalsa.dev/store/cmd/migrate-gen -output migrations -filename init.sql
 ```
 
 The generated migration creates:
@@ -321,7 +321,7 @@ The generated migration creates:
 `cmd/eventmap-gen` generates type-safe mapping code between your domain event structs and `store.Event` / `store.PersistedEvent`. This keeps your domain model free of infrastructure dependencies.
 
 ```bash
-go run github.com/eventsalsa/store/cmd/eventmap-gen \
+go run eventsalsa.dev/store/cmd/eventmap-gen \
   -input internal/domain/events \
   -output internal/infrastructure/generated
 ```
@@ -367,4 +367,4 @@ make fmt
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.

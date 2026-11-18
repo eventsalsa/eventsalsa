@@ -42,7 +42,7 @@ type EventStore interface {
 	//
 	// After a successful append:
 	// - Use result.ToVersion() to get the new stream version
-	// - Use result.Events to access the persisted events with all fields populated
+	// - Use result.Events to access the persisted events with all fields populated (including TransactionID)
 	// - Use result.GlobalPositions to get the assigned global positions
 	Append(ctx context.Context, tx pgx.Tx, expectedVersion ExpectedVersion, events []Event) (AppendResult, error)
 }

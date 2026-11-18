@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/eventsalsa/store/migrations"
+	"eventsalsa.dev/store/migrations"
 )
 
 var testDBConnStr string
