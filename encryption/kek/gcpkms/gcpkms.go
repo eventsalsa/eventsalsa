@@ -8,10 +8,11 @@ import (
 	"hash/crc32"
 
 	"cloud.google.com/go/kms/apiv1/kmspb"
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
 )
 
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)

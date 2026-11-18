@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	"cloud.google.com/go/kms/apiv1/kmspb"
-	"github.com/eventsalsa/encryption"
-	"github.com/eventsalsa/encryption/kek"
-	"github.com/eventsalsa/encryption/kek/gcpkms"
-	"github.com/eventsalsa/encryption/kek/local"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"eventsalsa.dev/encryption"
+	"eventsalsa.dev/encryption/kek"
+	"eventsalsa.dev/encryption/kek/gcpkms"
+	"eventsalsa.dev/encryption/kek/local"
 )
 
 var castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
@@ -181,7 +182,10 @@ func TestCRC32CIntegrityVerification(t *testing.T) {
 		t.Parallel()
 		client := newMockGCPClient(t, keyName)
 		client.unverifiedPlaintext = true
-		w, _ := gcpkms.NewWrapper(client, keyName)
+		w, err := gcpkms.NewWrapper(client, keyName)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := w.Wrap(ctx, dek, aad); !errors.Is(err, encryption.ErrEncryption) {
 			t.Fatalf("err = %v, want ErrEncryption", err)
 		}
@@ -191,7 +195,10 @@ func TestCRC32CIntegrityVerification(t *testing.T) {
 		t.Parallel()
 		client := newMockGCPClient(t, keyName)
 		client.unverifiedAAD = true
-		w, _ := gcpkms.NewWrapper(client, keyName)
+		w, err := gcpkms.NewWrapper(client, keyName)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := w.Wrap(ctx, dek, aad); !errors.Is(err, encryption.ErrEncryption) {
 			t.Fatalf("err = %v, want ErrEncryption", err)
 		}
@@ -201,7 +208,10 @@ func TestCRC32CIntegrityVerification(t *testing.T) {
 		t.Parallel()
 		client := newMockGCPClient(t, keyName)
 		client.corruptCiphertextCRC = true
-		w, _ := gcpkms.NewWrapper(client, keyName)
+		w, err := gcpkms.NewWrapper(client, keyName)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := w.Wrap(ctx, dek, aad); !errors.Is(err, encryption.ErrEncryption) {
 			t.Fatalf("err = %v, want ErrEncryption", err)
 		}
@@ -210,7 +220,10 @@ func TestCRC32CIntegrityVerification(t *testing.T) {
 	t.Run("corrupted plaintext CRC on Decrypt response", func(t *testing.T) {
 		t.Parallel()
 		client := newMockGCPClient(t, keyName)
-		w, _ := gcpkms.NewWrapper(client, keyName)
+		w, err := gcpkms.NewWrapper(client, keyName)
+		if err != nil {
+			t.Fatal(err)
+		}
 		encDEK, err := w.Wrap(ctx, dek, aad)
 		if err != nil {
 			t.Fatal(err)

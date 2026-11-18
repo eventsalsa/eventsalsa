@@ -1,10 +1,10 @@
-module github.com/eventsalsa/encryption/kek/gcpkms
+module eventsalsa.dev/encryption/kek/gcpkms
 
-go 1.26.0
+go 1.27.4
 
 require (
 	cloud.google.com/go/kms v1.35.0
-	github.com/eventsalsa/encryption v0.0.0
+	eventsalsa.dev/encryption v0.1.0
 	github.com/googleapis/gax-go/v2 v2.23.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -26,5 +26,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 )
-
-replace github.com/eventsalsa/encryption => ../..
