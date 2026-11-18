@@ -1,0 +1,104 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 06:00 UTC
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gosec:
+    name: gosec (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - name: root
+            dir: .
+            args: -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples
+          - name: awskms
+            dir: kek/awskms
+            args: ""
+          - name: gcpkms
+            dir: kek/gcpkms
+            args: ""
+          - name: examples
+            dir: examples
+            args: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        working-directory: ${{ matrix.module.dir }}
+        run: gosec -no-fail ${{ matrix.module.args }} -fmt sarif -out gosec-results.sarif ./...
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ matrix.module.dir }}/gosec-results.sarif
+          category: gosec-${{ matrix.module.name }}
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: |
+          govulncheck ./...
+          govulncheck -C kek/awskms ./...
+          govulncheck -C kek/gcpkms ./...
+          govulncheck -C examples ./...
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+
+      - name: Build all modules
+        run: |
+          go build ./...
+          go build -C kek/awskms ./...
+          go build -C kek/gcpkms ./...
+          go build -C examples ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
