@@ -119,7 +119,7 @@ jobs:
       - name: Build all modules
         run: |
           for mod in store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples; do
-            go build -a -C "$mod" ./...
+            go build -C "$mod" -a ./...
           done
 
       - name: Perform CodeQL Analysis
