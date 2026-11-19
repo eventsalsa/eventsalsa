@@ -3,7 +3,7 @@ module eventsalsa.dev/projector
 go 1.27.4
 
 require (
-	eventsalsa.dev/store v0.3.0
+	eventsalsa.dev/store v0.4.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/lib/pq v1.12.0
