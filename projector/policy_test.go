@@ -74,10 +74,11 @@ func TestSkipPoisonBatchAdvancesCheckpoint(t *testing.T) {
 		config: Config{BatchSize: 10, Logger: store.NoOpLogger{}},
 	}
 
+	target := store.Cursor{TransactionID: 12, GlobalPosition: 5}
 	failed := &batchError{
 		cause:  failure.Permanent(errors.New("malformed document")),
 		rows:   []store.PersistedEvent{unitTestEvent(1, "order")},
-		target: 5,
+		target: target,
 	}
 
 	if err := daemon.skipPoisonBatch(context.Background(), entry, failed); err != nil {
@@ -92,32 +93,59 @@ func TestSkipPoisonBatchAdvancesCheckpoint(t *testing.T) {
 	if state.commitCalls != 1 {
 		t.Fatalf("commitCalls = %d, want 1", state.commitCalls)
 	}
+	if len(state.execArgs) != 1 || len(state.execArgs[0]) != 3 {
+		t.Fatalf("execArgs = %#v, want 3 checkpoint save args", state.execArgs)
+	}
+	if state.execArgs[0][0] != "poison-skip" || state.execArgs[0][1] != "12" || state.execArgs[0][2] != int64(5) {
+		t.Fatalf("execArgs[0] = %#v, want [poison-skip 12 5]", state.execArgs[0])
+	}
 }
 
 func TestSkipPoisonBatchNoOpWhenCheckpointAlreadyAhead(t *testing.T) {
-	instanceID := uuid.New()
-	state := &stubDBState{ownerID: instanceID.String(), ownerValid: true, checkpointPos: 10}
-	entry := registrationForTest(t, &stubDetachedProjection{name: "poison-ahead"})
-	daemon := &Daemon{
-		id:     instanceID,
-		db:     openStubDB(t, state),
-		store:  &stubProjectorStore{},
-		config: Config{BatchSize: 10, Logger: store.NoOpLogger{}},
+	tests := []struct {
+		name       string
+		checkpoint store.Cursor
+		target     store.Cursor
+	}{
+		{
+			name:       "same transaction higher position",
+			checkpoint: store.Cursor{TransactionID: 10, GlobalPosition: 10},
+			target:     store.Cursor{TransactionID: 10, GlobalPosition: 5},
+		},
+		{
+			name:       "higher transaction lower position",
+			checkpoint: store.Cursor{TransactionID: 11, GlobalPosition: 2},
+			target:     store.Cursor{TransactionID: 10, GlobalPosition: 99},
+		},
 	}
 
-	failed := &batchError{cause: failure.Permanent(errors.New("malformed")), target: 5}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			instanceID := uuid.New()
+			state := &stubDBState{ownerID: instanceID.String(), ownerValid: true, checkpoint: tc.checkpoint}
+			entry := registrationForTest(t, &stubDetachedProjection{name: "poison-ahead"})
+			daemon := &Daemon{
+				id:     instanceID,
+				db:     openStubDB(t, state),
+				store:  &stubProjectorStore{},
+				config: Config{BatchSize: 10, Logger: store.NoOpLogger{}},
+			}
 
-	if err := daemon.skipPoisonBatch(context.Background(), entry, failed); err != nil {
-		t.Fatalf("skipPoisonBatch() error = %v", err)
-	}
+			failed := &batchError{cause: failure.Permanent(errors.New("malformed")), target: tc.target}
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.execCalls != 0 {
-		t.Fatalf("execCalls = %d, want 0 when the checkpoint is already past the target", state.execCalls)
-	}
-	if state.commitCalls != 0 {
-		t.Fatalf("commitCalls = %d, want 0 when nothing was written", state.commitCalls)
+			if err := daemon.skipPoisonBatch(context.Background(), entry, failed); err != nil {
+				t.Fatalf("skipPoisonBatch() error = %v", err)
+			}
+
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.execCalls != 0 {
+				t.Fatalf("execCalls = %d, want 0 when the checkpoint is already past the target", state.execCalls)
+			}
+			if state.commitCalls != 0 {
+				t.Fatalf("commitCalls = %d, want 0 when nothing was written", state.commitCalls)
+			}
+		})
 	}
 }
 
@@ -125,7 +153,7 @@ func TestBatchErrorCarriesBatchAndClassification(t *testing.T) {
 	inner := &batchError{
 		cause:  failure.Permanent(errors.New("bad document")),
 		rows:   []store.PersistedEvent{unitTestEvent(1, "order")},
-		target: 3,
+		target: store.Cursor{TransactionID: 9, GlobalPosition: 3},
 	}
 	wrapped := fmt.Errorf("projection loop: %w", inner)
 
@@ -133,8 +161,8 @@ func TestBatchErrorCarriesBatchAndClassification(t *testing.T) {
 	if !errors.As(wrapped, &extracted) {
 		t.Fatal("errors.As did not find the batchError")
 	}
-	if extracted.target != 3 || len(extracted.rows) != 1 {
-		t.Fatalf("extracted = %#v, want target 3 and one event", extracted)
+	if extracted.target != (store.Cursor{TransactionID: 9, GlobalPosition: 3}) || len(extracted.rows) != 1 {
+		t.Fatalf("extracted = %#v, want target {9, 3} and one event", extracted)
 	}
 	if !failure.IsPermanent(wrapped) {
 		t.Fatal("wrapped permanent batch error is not reported as permanent")

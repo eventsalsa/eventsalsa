@@ -31,9 +31,6 @@ func TestDefaultConfig(t *testing.T) {
 	if config.ProjectionCheckpointsTable != "projection_checkpoints" {
 		t.Fatalf("ProjectionCheckpointsTable = %q, want %q", config.ProjectionCheckpointsTable, "projection_checkpoints")
 	}
-	if config.ProjectionGapSkipsTable != "projection_gap_skips" {
-		t.Fatalf("ProjectionGapSkipsTable = %q, want %q", config.ProjectionGapSkipsTable, "projection_gap_skips")
-	}
 	if config.ProjectorLeaderLeasesTable != "projector_leader_leases" {
 		t.Fatalf("ProjectorLeaderLeasesTable = %q, want %q", config.ProjectorLeaderLeasesTable, "projector_leader_leases")
 	}
@@ -46,7 +43,6 @@ func TestGeneratePostgresSQL(t *testing.T) {
 		ProjectorInstancesTable:    "projector_instances",
 		ProjectionAssignmentsTable: "projection_assignments",
 		ProjectionCheckpointsTable: "projection_checkpoints",
-		ProjectionGapSkipsTable:    "projection_gap_skips",
 		ProjectorLeaderLeasesTable: "projector_leader_leases",
 	}
 
@@ -57,15 +53,14 @@ func TestGeneratePostgresSQL(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS projector_instances",
 		"CREATE TABLE IF NOT EXISTS projection_assignments",
 		"CREATE TABLE IF NOT EXISTS projection_checkpoints",
-		"CREATE TABLE IF NOT EXISTS projection_gap_skips",
 		"CREATE TABLE IF NOT EXISTS projector_leader_leases",
 		"instance_id UUID PRIMARY KEY",
 		"heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
 		"created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
 		"instance_id UUID REFERENCES projector_instances(instance_id) ON DELETE SET NULL",
 		"leader_id UUID REFERENCES projector_instances(instance_id) ON DELETE CASCADE",
+		"last_transaction_id xid8 NOT NULL DEFAULT '0'",
 		"last_position BIGINT NOT NULL DEFAULT 0",
-		"skip_to_position BIGINT NOT NULL",
 		"updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
 	}
 
@@ -75,13 +70,15 @@ func TestGeneratePostgresSQL(t *testing.T) {
 		}
 	}
 
+	if strings.Contains(sql, "projection_gap_skips") {
+		t.Error("Generated SQL should not contain projection_gap_skips")
+	}
+
 	requiredIndexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_projector_instances_heartbeat",
 		"ON projector_instances (heartbeat_at)",
 		"CREATE INDEX IF NOT EXISTS idx_projection_assignments_instance",
 		"ON projection_assignments (instance_id)",
-		"CREATE INDEX IF NOT EXISTS idx_projection_gap_skips_projection",
-		"ON projection_gap_skips (projection_name, created_at DESC)",
 	}
 
 	for _, required := range requiredIndexes {
@@ -98,7 +95,6 @@ func TestGeneratePostgresSQL_CustomTableNames(t *testing.T) {
 		ProjectorInstancesTable:    "custom_projector_instances",
 		ProjectionAssignmentsTable: "custom_projection_assignments",
 		ProjectionCheckpointsTable: "custom_projection_checkpoints",
-		ProjectionGapSkipsTable:    "custom_projection_gap_skips",
 		ProjectorLeaderLeasesTable: "custom_projector_leases",
 	}
 
@@ -108,13 +104,11 @@ func TestGeneratePostgresSQL_CustomTableNames(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS custom_projector_instances",
 		"CREATE TABLE IF NOT EXISTS custom_projection_assignments",
 		"CREATE TABLE IF NOT EXISTS custom_projection_checkpoints",
-		"CREATE TABLE IF NOT EXISTS custom_projection_gap_skips",
 		"CREATE TABLE IF NOT EXISTS custom_projector_leases",
 		"instance_id UUID REFERENCES custom_projector_instances(instance_id) ON DELETE SET NULL",
 		"leader_id UUID REFERENCES custom_projector_instances(instance_id) ON DELETE CASCADE",
 		"CREATE INDEX IF NOT EXISTS idx_custom_projector_instances_heartbeat",
 		"CREATE INDEX IF NOT EXISTS idx_custom_projection_assignments_instance",
-		"CREATE INDEX IF NOT EXISTS idx_custom_projection_gap_skips_projection",
 	}
 
 	for _, required := range requiredStrings {
@@ -131,7 +125,6 @@ func TestGeneratePostgresSQL_SchemaQualifiedTableNames(t *testing.T) {
 		ProjectorInstancesTable:    "infra.projector_instances",
 		ProjectionAssignmentsTable: "infra.projection_assignments",
 		ProjectionCheckpointsTable: "infra.projection_checkpoints",
-		ProjectionGapSkipsTable:    "infra.projection_gap_skips",
 		ProjectorLeaderLeasesTable: "infra.projector_leader_leases",
 	}
 
@@ -144,8 +137,6 @@ func TestGeneratePostgresSQL_SchemaQualifiedTableNames(t *testing.T) {
 		"ON infra.projector_instances (heartbeat_at)",
 		"CREATE INDEX IF NOT EXISTS idx_projection_assignments_instance",
 		"ON infra.projection_assignments (instance_id)",
-		"CREATE INDEX IF NOT EXISTS idx_projection_gap_skips_projection",
-		"ON infra.projection_gap_skips (projection_name, created_at DESC)",
 	}
 
 	for _, required := range requiredStrings {
@@ -164,7 +155,6 @@ func TestGeneratePostgres_WritesFile(t *testing.T) {
 		ProjectorInstancesTable:    "projector_instances",
 		ProjectionAssignmentsTable: "projection_assignments",
 		ProjectionCheckpointsTable: "projection_checkpoints",
-		ProjectionGapSkipsTable:    "projection_gap_skips",
 		ProjectorLeaderLeasesTable: "projector_leader_leases",
 	}
 

@@ -11,20 +11,20 @@ import (
 	"eventsalsa.dev/store"
 )
 
-// PollDispatcher checks the latest global position on a fixed interval and emits
-// wakeup signals when it detects new events.
+// PollDispatcher checks the latest settled event cursor on a fixed interval and emits
+// wakeup signals when it detects newly settled events.
 type PollDispatcher struct {
-	querier  PositionQuerier
+	querier  HeadQuerier
 	logger   store.Logger
 	db       txBeginner
 	wakeup   wakeupBroadcaster
+	lastHead store.Cursor
 	interval time.Duration
-	lastPos  int64
 	start    startGuard
 }
 
 // NewPollDispatcher constructs a poll-based dispatcher.
-func NewPollDispatcher(db txBeginner, querier PositionQuerier, interval time.Duration, logger store.Logger) *PollDispatcher {
+func NewPollDispatcher(db txBeginner, querier HeadQuerier, interval time.Duration, logger store.Logger) *PollDispatcher {
 	return &PollDispatcher{
 		db:       db,
 		querier:  querier,
@@ -48,16 +48,19 @@ func (d *PollDispatcher) Start(ctx context.Context) error {
 		return ErrNilQuerier
 	}
 
-	position, err := d.latestPosition(ctx)
+	head, err := d.currentHead(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
 		return fmt.Errorf("initialize poll dispatcher checkpoint: %w", err)
 	}
-	d.lastPos = position
+	d.lastHead = head
 
-	d.logger.Debug(ctx, "poll dispatcher started", "interval", d.interval, "last_position", d.lastPos)
+	d.logger.Debug(ctx, "poll dispatcher started",
+		"interval", d.interval,
+		"last_transaction_id", d.lastHead.TransactionID,
+		"last_position", d.lastHead.GlobalPosition)
 
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
@@ -68,7 +71,7 @@ func (d *PollDispatcher) Start(ctx context.Context) error {
 			d.logger.Debug(ctx, "poll dispatcher stopped")
 			return nil
 		case <-ticker.C:
-			position, err := d.latestPosition(ctx)
+			head, err := d.currentHead(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -77,13 +80,15 @@ func (d *PollDispatcher) Start(ctx context.Context) error {
 				continue
 			}
 
-			if position <= d.lastPos {
+			if !d.lastHead.Before(head) {
 				continue
 			}
 
-			d.lastPos = position
+			d.lastHead = head
 			d.signalWakeup()
-			d.logger.Debug(ctx, "poll dispatcher detected new events", "last_position", d.lastPos)
+			d.logger.Debug(ctx, "poll dispatcher detected new events",
+				"last_transaction_id", d.lastHead.TransactionID,
+				"last_position", d.lastHead.GlobalPosition)
 		}
 	}
 }
@@ -93,21 +98,21 @@ func (d *PollDispatcher) WakeupChan() <-chan struct{} {
 	return d.wakeup.Channel()
 }
 
-func (d *PollDispatcher) latestPosition(ctx context.Context) (int64, error) {
+func (d *PollDispatcher) currentHead(ctx context.Context) (store.Cursor, error) {
 	tx, err := d.db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return 0, ctx.Err()
+			return store.Cursor{}, ctx.Err()
 		}
-		return 0, err
+		return store.Cursor{}, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			d.logger.Error(ctx, "poll dispatcher latest position rollback failed", "error", rollbackErr)
+			d.logger.Error(ctx, "poll dispatcher head rollback failed", "error", rollbackErr)
 		}
 	}()
 
-	return d.querier.GetLatestGlobalPosition(ctx, tx)
+	return d.querier.GetHead(ctx, tx)
 }
 
 func (d *PollDispatcher) signalWakeup() {

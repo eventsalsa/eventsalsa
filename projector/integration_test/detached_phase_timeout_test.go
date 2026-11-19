@@ -6,17 +6,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
 
 	projectorpkg "eventsalsa.dev/projector"
 )
 
-// This file covers the phase budgets of a detached projection: the frontier
+// This file covers the phase budgets of a detached projection: the batch
 // probe and the external apply are bounded by BatchTimeout and
 // DetachedApplyTimeout, while the post-apply checkpoint phase is bounded by
 // CheckpointTimeout rooted in the long-lived processing context.
@@ -28,8 +30,6 @@ import (
 //	Q4/Q5  DetachedApplyTimeout cancels the apply early; the projection recovers
 //	Q8     a blocked checkpoint write is canceled by CheckpointTimeout
 //	Q9     a checkpoint blocked on a row lock is bounded and recovers
-//	Q10    a stale-gap skip commits despite an overrunning apply
-//	Q11    a gap that resolves during an overrunning apply is retried, not skipped
 //	Q17    an empty window applies nothing and opens no checkpoint transaction
 //
 // Q6 (BatchTimeout caps the apply), Q12 (serialization retry), Q13 (ownership
@@ -98,12 +98,12 @@ func TestDetachedPhase_BudgetedApplyCommitsOnBothShapes(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{perEvent.Name(), perBatch.Name()} {
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != latest {
-				return fmt.Errorf("checkpoint for %s=%d want %d", name, checkpoint, latest)
+				return fmt.Errorf("checkpoint for %s=%+v want %+v", name, checkpoint, latest)
 			}
 		}
 		return nil
@@ -112,7 +112,7 @@ func TestDetachedPhase_BudgetedApplyCommitsOnBothShapes(t *testing.T) {
 	if applied := perEvent.uniqueApplied(); applied != 3 {
 		t.Fatalf("per-event unique applied=%d, want 3", applied)
 	}
-	if applied := perBatch.timesApplied(latest); applied < 1 {
+	if applied := perBatch.timesApplied(latest.GlobalPosition); applied < 1 {
 		t.Fatalf("batch applied the last position %d times, want at least 1", applied)
 	}
 
@@ -154,11 +154,11 @@ func TestDetachedPhase_ApplyOverrunsBatchTimeoutCheckpointStillCommits(t *testin
 	harness := newFaultDaemonHarness(t, realDB, faults, registry, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d while the apply overruns BatchTimeout", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v while the apply overruns BatchTimeout", checkpoint, latest)
 		}
 		return nil
 	})
@@ -210,7 +210,7 @@ func TestDetachedPhase_ApplyTimeoutCancelsEarlyAndRecovers(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	start := time.Now()
 	waitForErr(t, defaultWaitTimeout, func() error {
@@ -230,7 +230,7 @@ func TestDetachedPhase_ApplyTimeoutCancelsEarlyAndRecovers(t *testing.T) {
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the destination recovered", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after the destination recovered", checkpoint, latest)
 		}
 		return nil
 	})
@@ -267,7 +267,7 @@ func TestDetachedPhase_CheckpointWriteExceedsCheckpointTimeout(t *testing.T) {
 	harness := newFaultDaemonHarness(t, realDB, faults, registry, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 2, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	// Two canceled writes inside a few seconds prove the write is bounded by
 	// CheckpointTimeout and not by the hanging statement or BatchTimeout.
@@ -284,15 +284,15 @@ func TestDetachedPhase_CheckpointWriteExceedsCheckpointTimeout(t *testing.T) {
 		return nil
 	})
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d want 0 while the checkpoint write hangs", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v want zero while the checkpoint write hangs", checkpoint)
 	}
 
 	faults.disarmCheckpointHang()
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the hang was cleared", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after the hang was cleared", checkpoint, latest)
 		}
 		return nil
 	})
@@ -310,7 +310,17 @@ func TestDetachedPhase_CheckpointBlockedByRowLockIsBounded(t *testing.T) {
 	faults := &faultState{}
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
+	var gateMu sync.Mutex
+	var activeGate chan struct{}
 	projection := &scriptedDetachedProjection{name: "detached-checkpoint-lock", entered: make(chan struct{}, 64)}
+	projection.onHandle = func(store.PersistedEvent) {
+		gateMu.Lock()
+		gate := activeGate
+		gateMu.Unlock()
+		if gate != nil {
+			<-gate
+		}
+	}
 
 	registry := projectorpkg.NewRegistry()
 	if err := registry.AddDetached(projection); err != nil {
@@ -325,14 +335,41 @@ func TestDetachedPhase_CheckpointBlockedByRowLockIsBounded(t *testing.T) {
 	harness := newFaultDaemonHarness(t, realDB, faults, registry, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Product")
-	firstPosition := appended[len(appended)-1].GlobalPosition
+	firstCursor := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != firstPosition {
-			return fmt.Errorf("checkpoint=%d want %d before the lock is taken", checkpoint, firstPosition)
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != firstCursor {
+			return fmt.Errorf("checkpoint=%+v want %+v before the lock is taken", checkpoint, firstCursor)
 		}
 		return nil
 	})
+	_, _, _, baselineAttempts := faults.checkpointObservations()
+
+	// Drain any earlier signal on projection.entered, then gate the next apply so
+	// we can lock the checkpoint row after the later events have already committed.
+	for len(projection.entered) > 0 {
+		<-projection.entered
+	}
+	gateMu.Lock()
+	activeGate = make(chan struct{})
+	gateMu.Unlock()
+	gateReleased := false
+	defer func() {
+		if !gateReleased {
+			gateMu.Lock()
+			close(activeGate)
+			gateMu.Unlock()
+		}
+	}()
+
+	later := appendTestEvents(t, controlDB, eventStore, 3, "Product")
+	latest := cursorOf(later)
+
+	select {
+	case <-projection.entered:
+	case <-time.After(defaultWaitTimeout):
+		t.Fatal("detached handler did not enter on later events")
+	}
 
 	lockPool := openTestDBWithMaxConns(t, 1)
 	defer lockPool.Close()
@@ -363,19 +400,22 @@ func TestDetachedPhase_CheckpointBlockedByRowLockIsBounded(t *testing.T) {
 		t.Fatalf("lock checkpoint row: %v", err)
 	}
 
-	later := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := later[len(later)-1].GlobalPosition
+	gateMu.Lock()
+	close(activeGate)
+	activeGate = nil
+	gateMu.Unlock()
+	gateReleased = true
 
 	waitForErr(t, 5*time.Second, func() error {
 		_, _, _, attempts := faults.checkpointObservations()
-		if attempts < 2 {
-			return fmt.Errorf("checkpoint attempts=%d, want at least 2 canceled attempts while the row is locked", attempts)
+		if attempts < baselineAttempts+2 {
+			return fmt.Errorf("checkpoint attempts=%d (baseline=%d), want at least 2 canceled attempts while the row is locked", attempts, baselineAttempts)
 		}
 		return nil
 	})
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != firstPosition {
-		t.Fatalf("checkpoint=%d want %d while the checkpoint row is locked", checkpoint, firstPosition)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != firstCursor {
+		t.Fatalf("checkpoint=%+v want %+v while the checkpoint row is locked", checkpoint, firstCursor)
 	}
 
 	if err := lockTx.Rollback(ctx); err != nil {
@@ -385,130 +425,10 @@ func TestDetachedPhase_CheckpointBlockedByRowLockIsBounded(t *testing.T) {
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the lock was released", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after the lock was released", checkpoint, latest)
 		}
 		return nil
 	})
-
-	harness.stop(t)
-}
-
-// TestDetachedPhase_StaleSkipCommitsDespiteOverrunningApply is Q10. The
-// stale-gap skip is recorded and committed on the checkpoint budget even though
-// the external apply ignores its context and outlives BatchTimeout.
-func TestDetachedPhase_StaleSkipCommitsDespiteOverrunningApply(t *testing.T) {
-	controlDB := setupPhaseTest(t)
-
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := &scriptedDetachedProjection{
-		name:       "detached-stale-overrun",
-		entered:    make(chan struct{}, 8),
-		applyDelay: time.Second,
-		ignoreCtx:  true,
-	}
-
-	registry := projectorpkg.NewRegistry()
-	if err := registry.AddDetached(projection); err != nil {
-		t.Fatalf("register detached projection: %v", err)
-	}
-
-	options := append(defaultProjectorOptions(),
-		projectorpkg.WithMaxConsecutiveFailures(0),
-		projectorpkg.WithBatchTimeout(400*time.Millisecond),
-		projectorpkg.WithCheckpointTimeout(2*time.Second),
-		projectorpkg.WithStaleGapThreshold(200*time.Millisecond),
-	)
-	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		assignments := getAssignments(t, controlDB)
-		if len(assignments) != 1 || !assignments[0].Assigned {
-			return errors.New("projection not assigned yet")
-		}
-		return nil
-	})
-
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Product", Count: 1})
-	appendTestEvents(t, controlDB, eventStore, 3, "Product")
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if skips := getGapSkipRows(t, controlDB, projection.Name()); len(skips) == 0 {
-			return errors.New("no stale-gap skip recorded yet")
-		}
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint <= 0 {
-			return errors.New("checkpoint has not advanced past the stale gap")
-		}
-		return nil
-	})
-
-	held.Commit(t)
-	harness.stop(t)
-}
-
-// TestDetachedPhase_GapResolvedDuringOverrunningApplyRetries is Q11. The gap
-// closes while the overrunning apply is in flight, so the frozen skip must be
-// discarded, the batch re-probed, and the resolved position handled.
-func TestDetachedPhase_GapResolvedDuringOverrunningApplyRetries(t *testing.T) {
-	controlDB := setupPhaseTest(t)
-
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := &scriptedDetachedProjection{
-		name:       "detached-gap-overrun",
-		entered:    make(chan struct{}, 8),
-		applyDelay: time.Second,
-		ignoreCtx:  true,
-	}
-
-	registry := projectorpkg.NewRegistry()
-	if err := registry.AddDetached(projection); err != nil {
-		t.Fatalf("register detached projection: %v", err)
-	}
-
-	options := append(defaultProjectorOptions(),
-		projectorpkg.WithMaxConsecutiveFailures(0),
-		projectorpkg.WithBatchTimeout(400*time.Millisecond),
-		projectorpkg.WithCheckpointTimeout(2*time.Second),
-		projectorpkg.WithStaleGapThreshold(200*time.Millisecond),
-	)
-	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		assignments := getAssignments(t, controlDB)
-		if len(assignments) != 1 || !assignments[0].Assigned {
-			return errors.New("projection not assigned yet")
-		}
-		return nil
-	})
-
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Product", Count: 1})
-	later := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := later[len(later)-1].GlobalPosition
-
-	// Gap-blocked batches never reach the applier, so the first entry marks the
-	// stale-gap advance whose plan is frozen before the apply starts.
-	select {
-	case <-projection.entered:
-	case <-time.After(defaultWaitTimeout):
-		t.Fatal("detached handler was not entered for the stale-gap advance")
-	}
-
-	// Resolve the gap while the apply is still running.
-	time.Sleep(150 * time.Millisecond)
-	held.Commit(t)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the gap resolved", checkpoint, latest)
-		}
-		return nil
-	})
-
-	if applied := projection.uniqueApplied(); applied != 4 {
-		t.Fatalf("unique applied=%d, want 4: the resolved position must be handled, not skipped", applied)
-	}
-	if skips := getGapSkipRows(t, controlDB, projection.Name()); len(skips) != 0 {
-		t.Fatalf("gap skips=%d, want 0 when the gap resolved during the apply", len(skips))
-	}
 
 	harness.stop(t)
 }
@@ -546,8 +466,8 @@ func TestDetachedPhase_EmptyWindowSkipsApplyAndCheckpoint(t *testing.T) {
 	if attempts := projection.Attempts(); attempts != 0 {
 		t.Fatalf("handler attempts=%d, want 0 for an empty window", attempts)
 	}
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d, want 0 for an empty window", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v, want zero for an empty window", checkpoint)
 	}
 
 	harness.stop(t)

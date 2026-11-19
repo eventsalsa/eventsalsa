@@ -128,7 +128,7 @@ func (s filterSpec) matches(event store.PersistedEvent) bool {
 
 // filteredApplier narrows the batch to events matching the registration filter.
 // Filtered-out events are skipped without error, so the executor still advances
-// the checkpoint to the unscoped safe frontier.
+// the checkpoint across the read window.
 type filteredApplier struct {
 	inner applier
 	spec  filterSpec

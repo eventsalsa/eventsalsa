@@ -23,9 +23,9 @@ type Projection interface {
 	// SQL projections can use this transaction to ensure atomic updates of both
 	// the read model and the checkpoint. This eliminates inconsistencies where
 	// a projection succeeds but the checkpoint update fails (or vice versa).
-	// It does not by itself guarantee that checkpointing to the highest seen
-	// global position is safe; processors still need a gap-aware runtime/frontier
-	// before advancing checkpoints under concurrent writers.
+	// The daemon feeds settled committed events behind PostgreSQL's active
+	// transaction visibility horizon (pg_snapshot_xmin) and persists composite
+	// (last_transaction_id, last_position) checkpoints atomically.
 	//
 	// The transaction will be committed by the daemon after Handle returns successfully.
 	// Projections should NEVER call Commit() or Rollback() on the provided transaction.
@@ -74,9 +74,9 @@ type BatchProjection interface {
 	// Name returns the unique name of this projection.
 	Name() string
 
-	// Handle applies every event in the batch. The batch contains only events at
-	// or below the current safe frontier. Returning an error fails the whole
-	// batch and the checkpoint is not advanced.
+	// Handle applies every event in the batch. The batch contains only settled
+	// events behind PostgreSQL's active transaction visibility horizon. Returning
+	// an error fails the whole batch and the checkpoint is not advanced.
 	Handle(ctx context.Context, tx pgx.Tx, events []store.PersistedEvent) error
 }
 
@@ -88,8 +88,8 @@ type DetachedBatchProjection interface {
 	Name() string
 
 	// Handle applies every event in the batch to the external read model. The
-	// batch contains only events at or below the current safe frontier. It must
-	// honor ctx and return when ctx is done.
+	// batch contains only settled events behind PostgreSQL's active transaction
+	// visibility horizon. It must honor ctx and return when ctx is done.
 	Handle(ctx context.Context, events []store.PersistedEvent) error
 }
 

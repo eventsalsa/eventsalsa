@@ -30,7 +30,9 @@ func (l *LoggingObserver) OnBatchProcessed(ctx context.Context, stats projector.
 	if stats.Error != nil {
 		l.logger.ErrorContext(ctx, "batch processing failed",
 			"projection", stats.ProjectionName,
+			"start_tx_id", stats.StartTransactionID,
 			"start_pos", stats.StartPosition,
+			"last_tx_id", stats.LastTransactionID,
 			"last_pos", stats.LastPosition,
 			"duration", stats.Duration,
 			"error", stats.Error,
@@ -40,14 +42,16 @@ func (l *LoggingObserver) OnBatchProcessed(ctx context.Context, stats projector.
 
 	l.logger.InfoContext(ctx, "batch processed successfully",
 		"projection", stats.ProjectionName,
+		"start_tx_id", stats.StartTransactionID,
 		"start_pos", stats.StartPosition,
+		"last_tx_id", stats.LastTransactionID,
 		"last_pos", stats.LastPosition,
+		"head_tx_id", stats.HeadTransactionID,
 		"head_pos", stats.HeadPosition,
 		"lag", stats.Lag,
 		"events_read", stats.EventsRead,
 		"events_handled", stats.EventsHandled,
 		"duration", stats.Duration,
-		"stale_skipped", stats.StaleSkipped,
 	)
 }
 
@@ -55,24 +59,6 @@ func (l *LoggingObserver) OnHeartbeat(ctx context.Context, stats projector.Daemo
 	l.logger.DebugContext(ctx, "heartbeat refreshed",
 		"instance_id", stats.InstanceID,
 		"is_leader", stats.IsLeader,
-	)
-}
-
-func (l *LoggingObserver) OnGapDetected(ctx context.Context, stats projector.GapStats) {
-	l.logger.WarnContext(ctx, "sequence gap detected",
-		"projection", stats.ProjectionName,
-		"gap_position", stats.GapPosition,
-		"highest_visible", stats.HighestVisible,
-		"stale_for", stats.StaleFor,
-	)
-}
-
-func (l *LoggingObserver) OnGapSkipped(ctx context.Context, stats projector.GapStats) {
-	l.logger.WarnContext(ctx, "safe harbor advanced past stale gap",
-		"projection", stats.ProjectionName,
-		"gap_position", stats.GapPosition,
-		"highest_visible", stats.HighestVisible,
-		"stale_for", stats.StaleFor,
 	)
 }
 
@@ -88,6 +74,7 @@ func (l *LoggingObserver) OnProjectionDegraded(ctx context.Context, stats projec
 func (l *LoggingObserver) OnPoisonBatchSkipped(ctx context.Context, stats projector.PoisonBatchStats) {
 	l.logger.ErrorContext(ctx, "poison batch skipped",
 		"projection", stats.ProjectionName,
+		"target_tx_id", stats.TargetTransactionID,
 		"target_position", stats.TargetPosition,
 		"event_count", stats.EventCount,
 		"error", stats.Cause,

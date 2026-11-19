@@ -34,7 +34,6 @@ type Config struct { //nolint:govet // fieldalignment: readability over marginal
 	ProjectorInstancesTable    string
 	ProjectionAssignmentsTable string
 	ProjectionCheckpointsTable string
-	ProjectionGapSkipsTable    string
 	LeaderStrategy             LeaderStrategy
 	ProjectorLeaderLeasesTable string
 	DispatcherStrategy         DispatcherStrategy
@@ -53,8 +52,6 @@ type Config struct { //nolint:govet // fieldalignment: readability over marginal
 	DetachedApplyTimeout       time.Duration
 	CheckpointTimeout          time.Duration
 	ShutdownTimeout            time.Duration
-	StaleGapThreshold          time.Duration
-	StaleGapHarborLag          int
 	Observer                   Observer
 }
 
@@ -78,17 +75,14 @@ func DefaultConfig() Config {
 		DetachedApplyTimeout:       30 * time.Second,
 		CheckpointTimeout:          5 * time.Second,
 		ShutdownTimeout:            5 * time.Second,
-		StaleGapThreshold:          30 * time.Second,
 		Logger:                     store.NoOpLogger{},
 		ProjectorInstancesTable:    postgres.DefaultProjectorInstancesTable,
 		ProjectionAssignmentsTable: postgres.DefaultProjectionAssignmentsTable,
 		ProjectionCheckpointsTable: postgres.DefaultProjectionCheckpointsTable,
-		ProjectionGapSkipsTable:    postgres.DefaultProjectionGapSkipsTable,
 		LeaderStrategy:             LeaderStrategyAdvisory,
 		ProjectorLeaderLeasesTable: postgres.DefaultProjectorLeaderLeasesTable,
 		DispatcherStrategy:         DispatcherStrategyPoll,
 		NotifyChannel:              "",
-		StaleGapHarborLag:          8,
 	}
 }
 
@@ -155,7 +149,7 @@ func WithBatchPause(d time.Duration) Option {
 // If a batch (including DB operations and event handling) exceeds this duration,
 // the context is canceled and the batch is rolled back.
 //
-// For detached projections it bounds the frontier probe and the external apply.
+// For detached projections it bounds the initial batch probe and the external apply.
 // The post-apply checkpoint phase has its own budget (WithCheckpointTimeout), so a
 // detached batch cycle can take up to BatchTimeout plus CheckpointTimeout.
 func WithBatchTimeout(d time.Duration) Option {
@@ -194,22 +188,6 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
-// WithStaleGapThreshold sets how long the daemon waits on the same missing
-// global position before applying safe-harbor advancement.
-func WithStaleGapThreshold(d time.Duration) Option {
-	return func(c *Config) {
-		c.StaleGapThreshold = d
-	}
-}
-
-// WithStaleGapHarborLag sets how far behind the visible head the daemon stays
-// when advancing past a stale gap.
-func WithStaleGapHarborLag(n int) Option {
-	return func(c *Config) {
-		c.StaleGapHarborLag = n
-	}
-}
-
 // WithMaxConsecutiveFailures sets how many consecutive batch failures a projection
 // tolerates before the daemon triggers a fatal shutdown. This prevents the daemon
 // from appearing healthy (heartbeat alive) while projections make no progress.
@@ -244,13 +222,6 @@ func WithProjectionAssignmentsTable(name string) Option {
 func WithProjectionCheckpointsTable(name string) Option {
 	return func(c *Config) {
 		c.ProjectionCheckpointsTable = name
-	}
-}
-
-// WithProjectionGapSkipsTable sets the projection gap skip audit table name.
-func WithProjectionGapSkipsTable(name string) Option {
-	return func(c *Config) {
-		c.ProjectionGapSkipsTable = name
 	}
 }
 

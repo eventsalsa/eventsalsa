@@ -10,7 +10,7 @@ This document defines the architecture, conventions, cross-module development wo
 | :--- | :--- | :--- |
 | `store/` | `eventsalsa.dev/store` — PostgreSQL event store, migrations, `eventmap-gen` | `store` |
 | `snapshot/` | `eventsalsa.dev/snapshot` — Generic stream snapshotting, codecs, upcasters | `snapshot` |
-| `projector/` | `eventsalsa.dev/projector` — Distributed async projection daemon & gap-aware frontier | `projector` |
+| `projector/` | `eventsalsa.dev/projector` — Distributed async projection daemon & MVCC visibility-horizon checkpointing | `projector` |
 | `encryption/` | `eventsalsa.dev/encryption` — KMS-native envelope encryption, AAD binding, keystore | `encryption` |
 | `encryption/kek/awskms/` | `eventsalsa.dev/encryption/kek/awskms` — AWS KMS KEK `Wrapper` / `Rewrapper` | `encryption/kek/awskms` |
 | `encryption/kek/gcpkms/` | `eventsalsa.dev/encryption/kek/gcpkms` — Google Cloud KMS KEK `Wrapper` | `encryption/kek/gcpkms` |

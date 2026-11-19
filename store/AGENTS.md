@@ -16,9 +16,9 @@ This document defines the architecture, conventions, workflows, and skills used 
 ### Package Structure
 
 ```
-store/                     # Core types (Event, PersistedEvent, Stream, AppendResult)
+store/                     # Core types (Event, PersistedEvent, Stream, AppendResult, Cursor)
 │                          # + store interfaces (EventStore, EventReader, StreamReader,
-│                          #   GlobalPositionReader) + expected version helpers
+│                          #   HeadReader) + expected version helpers
 ├── postgres/              # PostgreSQL implementation of all store interfaces
 ├── migrations/            # SQL migration generator (events + stream_heads tables)
 ├── eventmap/              # Code generator: maps domain event structs ↔ store.Event / store.PersistedEvent

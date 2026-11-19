@@ -49,7 +49,7 @@ func TestProjector_SingleProjectorMultipleProjections(t *testing.T) {
 		testEventBatch{StreamType: "Account", Count: 3},
 		testEventBatch{StreamType: "Order", Count: 2},
 	)
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if rows := getHandledRows(t, controlDB, projectionAll.Name()); len(rows) != 5 {
@@ -62,19 +62,19 @@ func TestProjector_SingleProjectorMultipleProjections(t *testing.T) {
 			return fmt.Errorf("projection-orders handled %d rows, want 2", len(rows))
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projectionAll.Name()); checkpoint != latest {
-			return fmt.Errorf("projection-all checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("projection-all checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projectionAccounts.Name()); checkpoint != latest {
-			return fmt.Errorf("projection-accounts checkpoint=%d want %d (safe global frontier)", checkpoint, latest)
+			return fmt.Errorf("projection-accounts checkpoint=%+v want %+v (MVCC horizon cursor)", checkpoint, latest)
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projectionOrders.Name()); checkpoint != latest {
-			return fmt.Errorf("projection-orders checkpoint=%d want %d (safe global frontier)", checkpoint, latest)
+			return fmt.Errorf("projection-orders checkpoint=%+v want %+v (MVCC horizon cursor)", checkpoint, latest)
 		}
 		return nil
 	})
 }
 
-func TestRebalance_ScaleUp_ProjectorsReassignWithoutGapsOrDuplication(t *testing.T) {
+func TestRebalance_ScaleUp_ProjectorsReassignWithoutDuplication(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -101,7 +101,7 @@ func TestRebalance_ScaleUp_ProjectorsReassignWithoutGapsOrDuplication(t *testing
 		testEventBatch{StreamType: "Account", Count: 3},
 		testEventBatch{StreamType: "Order", Count: 2},
 	)
-	initialLatest := initial[len(initial)-1].GlobalPosition
+	initialLatestPos := initial[len(initial)-1].GlobalPosition
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
@@ -134,7 +134,7 @@ func TestRebalance_ScaleUp_ProjectorsReassignWithoutGapsOrDuplication(t *testing
 	})
 
 	more := appendTestEvents(t, controlDB, eventStore, 3, "Invoice")
-	finalLatest := more[len(more)-1].GlobalPosition
+	finalLatest := cursorOf(more)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
@@ -142,10 +142,10 @@ func TestRebalance_ScaleUp_ProjectorsReassignWithoutGapsOrDuplication(t *testing
 				return fmt.Errorf("%s handled %d rows, want 8", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != finalLatest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, finalLatest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, finalLatest)
 			}
 		}
-		labels := handledByAfter(t, controlDB, initialLatest)
+		labels := handledByAfter(t, controlDB, initialLatestPos)
 		if len(labels) != 2 || labels[0] != "projector-1" || labels[1] != "projector-2" {
 			return fmt.Errorf("post-rebalance events handled by %v, want both projectors", labels)
 		}
@@ -184,7 +184,7 @@ func TestRebalance_ScaleDown_ProjectorStops_SurvivorOwnsAllProjections(t *testin
 	})
 
 	first := appendTestEvents(t, controlDB, eventStore, 2, "Customer")
-	firstLatest := first[len(first)-1].GlobalPosition
+	firstLatestPos := first[len(first)-1].GlobalPosition
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
 			if rows := getHandledRows(t, controlDB, name); len(rows) != 2 {
@@ -208,7 +208,7 @@ func TestRebalance_ScaleDown_ProjectorStops_SurvivorOwnsAllProjections(t *testin
 	})
 
 	more := appendTestEvents(t, controlDB, eventStore, 3, "Customer")
-	finalLatest := more[len(more)-1].GlobalPosition
+	finalLatest := cursorOf(more)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
@@ -216,10 +216,10 @@ func TestRebalance_ScaleDown_ProjectorStops_SurvivorOwnsAllProjections(t *testin
 				return fmt.Errorf("%s handled %d rows, want 5", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != finalLatest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, finalLatest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, finalLatest)
 			}
 		}
-		labels := handledByAfter(t, controlDB, firstLatest)
+		labels := handledByAfter(t, controlDB, firstLatestPos)
 		if len(labels) != 1 || labels[0] != "projector-1" {
 			return fmt.Errorf("post-scale-down events handled by %v, want only projector-1", labels)
 		}
@@ -340,7 +340,7 @@ func TestDispatcher_WakeupDispatcher_IdleProjectionsWakePromptly(t *testing.T) {
 
 	start := time.Now()
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Wakeup")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, 2*time.Second, func() error {
 		rows := getHandledRows(t, controlDB, projection.Name())
@@ -348,7 +348,7 @@ func TestDispatcher_WakeupDispatcher_IdleProjectionsWakePromptly(t *testing.T) {
 			return fmt.Errorf("projection handled %d rows, want 1", len(rows))
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})
@@ -378,7 +378,7 @@ func TestTransactionalIntegrity_MidBatchFailureRollsBackAndRetriesFromCheckpoint
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Payment")
 	projection.FailUntilCleared(appended[1].GlobalPosition, errors.New("boom"))
-	lastPosition := appended[len(appended)-1].GlobalPosition
+	lastCursor := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if projection.AttemptCount(appended[1].GlobalPosition) < 1 {
@@ -390,8 +390,8 @@ func TestTransactionalIntegrity_MidBatchFailureRollsBackAndRetriesFromCheckpoint
 		if rows := getHandledRows(t, controlDB, projection.Name()); len(rows) != 0 {
 			return fmt.Errorf("read model has %d committed rows, want 0 before retry succeeds", len(rows))
 		}
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-			return fmt.Errorf("checkpoint=%d want 0 while projection is failing", checkpoint)
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+			return fmt.Errorf("checkpoint=%+v want zero while projection is failing", checkpoint)
 		}
 		return nil
 	})
@@ -403,225 +403,14 @@ func TestTransactionalIntegrity_MidBatchFailureRollsBackAndRetriesFromCheckpoint
 		if len(rows) != 3 {
 			return fmt.Errorf("committed rows=%d want 3", len(rows))
 		}
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != lastPosition {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, lastPosition)
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != lastCursor {
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, lastCursor)
 		}
 		if projection.AttemptCount(appended[0].GlobalPosition) < 2 {
 			return fmt.Errorf("first event attempts=%d want at least 2 to prove retry from same checkpoint", projection.AttemptCount(appended[0].GlobalPosition))
 		}
 		return nil
 	})
-}
-
-func TestGapHandling_LowerPositionCommitsLateBeforeThreshold_NoSkip(t *testing.T) {
-	controlDB := openTestDB(t)
-	defer controlDB.Close()
-	setupSchema(t, controlDB)
-	defer cleanupTables(t, controlDB)
-
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := newTestProjection("projection-gap-late", "projector-1", nil)
-	projector := startTestProjector(t, "projector-1", []*testProjection{projection},
-		append(defaultProjectorOptions(),
-			projectorpkg.WithStaleGapThreshold(2*time.Second),
-			projectorpkg.WithBatchPause(100*time.Millisecond),
-		)...,
-	)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		assignments := getAssignments(t, controlDB)
-		if len(assignments) != 1 || !assignments[0].Assigned || assignments[0].InstanceID != projector.daemon.ID() {
-			return fmt.Errorf("projection not assigned to projector-1 yet")
-		}
-		return nil
-	})
-
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Invoice", Count: 1})
-	gapPosition := held.events[0].GlobalPosition
-	later := appendTestEvents(t, controlDB, eventStore, 3, "Invoice")
-	latest := later[len(later)-1].GlobalPosition
-
-	waitForErr(t, time.Second, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-			return fmt.Errorf("checkpoint=%d want 0 while waiting for lower position", checkpoint)
-		}
-		if rows := getHandledRows(t, controlDB, projection.Name()); len(rows) != 0 {
-			return fmt.Errorf("handled rows=%d want 0 before lower position commits", len(rows))
-		}
-		return nil
-	})
-
-	held.Commit(t)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		rows := getHandledRows(t, controlDB, projection.Name())
-		if len(rows) != 4 {
-			return fmt.Errorf("handled rows=%d want 4", len(rows))
-		}
-		wantPositions := []int64{gapPosition}
-		for _, event := range later {
-			wantPositions = append(wantPositions, event.GlobalPosition)
-		}
-		sort.Slice(wantPositions, func(i, j int) bool { return wantPositions[i] < wantPositions[j] })
-		for idx, want := range wantPositions {
-			if rows[idx].GlobalPosition != want {
-				return fmt.Errorf("handled row %d position=%d want %d", idx, rows[idx].GlobalPosition, want)
-			}
-		}
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
-		}
-		if skips := getGapSkipRows(t, controlDB, projection.Name()); len(skips) != 0 {
-			return fmt.Errorf("gap skips=%d want 0", len(skips))
-		}
-		return nil
-	})
-}
-
-func TestGapHandling_StaleGapAfterThreshold_AdvancesBySafeHarbor(t *testing.T) {
-	controlDB := openTestDB(t)
-	defer controlDB.Close()
-	setupSchema(t, controlDB)
-	defer cleanupTables(t, controlDB)
-
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := newTestProjection("projection-gap-stale", "projector-1", nil)
-	projector := startTestProjector(t, "projector-1", []*testProjection{projection},
-		append(defaultProjectorOptions(),
-			projectorpkg.WithStaleGapThreshold(250*time.Millisecond),
-			projectorpkg.WithStaleGapHarborLag(1),
-			projectorpkg.WithPollInterval(500*time.Millisecond),
-			projectorpkg.WithMaxPollInterval(500*time.Millisecond),
-			projectorpkg.WithBatchPause(500*time.Millisecond),
-		)...,
-	)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		assignments := getAssignments(t, controlDB)
-		if len(assignments) != 1 || !assignments[0].Assigned || assignments[0].InstanceID != projector.daemon.ID() {
-			return fmt.Errorf("projection not assigned to projector-1 yet")
-		}
-		return nil
-	})
-
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Invoice", Count: 1})
-	later := appendTestEvents(t, controlDB, eventStore, 4, "Invoice")
-	expectedSkipTo := later[len(later)-2].GlobalPosition
-	expectedHighestVisible := later[len(later)-1].GlobalPosition
-
-	waitForErr(t, time.Second, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-			return fmt.Errorf("checkpoint=%d want 0 before stale threshold", checkpoint)
-		}
-		return nil
-	})
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if skips := getGapSkipRows(t, controlDB, projection.Name()); len(skips) != 1 {
-			return fmt.Errorf("gap skips=%d want 1", len(skips))
-		}
-		return nil
-	})
-
-	projector.stop(t)
-	held.Rollback(t)
-
-	skips := getGapSkipRows(t, controlDB, projection.Name())
-	if len(skips) != 1 {
-		t.Fatalf("gap skips=%d want 1", len(skips))
-	}
-	if skips[0].GapPosition != held.events[0].GlobalPosition {
-		t.Fatalf("gap position=%d want %d", skips[0].GapPosition, held.events[0].GlobalPosition)
-	}
-	if skips[0].SkipToPosition != expectedSkipTo {
-		t.Fatalf("skip_to_position=%d want %d", skips[0].SkipToPosition, expectedSkipTo)
-	}
-	if skips[0].HighestVisiblePosition != expectedHighestVisible {
-		t.Fatalf("highest_visible_position=%d want %d", skips[0].HighestVisiblePosition, expectedHighestVisible)
-	}
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != expectedSkipTo {
-		t.Fatalf("checkpoint=%d want %d", checkpoint, expectedSkipTo)
-	}
-	rows := getHandledRows(t, controlDB, projection.Name())
-	if len(rows) != 3 {
-		t.Fatalf("handled rows=%d want 3", len(rows))
-	}
-	for _, row := range rows {
-		if row.GlobalPosition > expectedSkipTo {
-			t.Fatalf("handled position=%d want <= %d", row.GlobalPosition, expectedSkipTo)
-		}
-	}
-}
-
-func TestGapHandling_StaleGapAfterThreshold_AdvancesWithSparseVisibleWindowUnderDefaultLag(t *testing.T) {
-	controlDB := openTestDB(t)
-	defer controlDB.Close()
-	setupSchema(t, controlDB)
-	defer cleanupTables(t, controlDB)
-
-	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := newTestProjection("projection-gap-stale-sparse-default", "projector-1", nil)
-	projector := startTestProjector(t, "projector-1", []*testProjection{projection},
-		append(defaultProjectorOptions(),
-			projectorpkg.WithStaleGapThreshold(250*time.Millisecond),
-			projectorpkg.WithPollInterval(500*time.Millisecond),
-			projectorpkg.WithMaxPollInterval(500*time.Millisecond),
-			projectorpkg.WithBatchPause(500*time.Millisecond),
-		)...,
-	)
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		assignments := getAssignments(t, controlDB)
-		if len(assignments) != 1 || !assignments[0].Assigned || assignments[0].InstanceID != projector.daemon.ID() {
-			return fmt.Errorf("projection not assigned to projector-1 yet")
-		}
-		return nil
-	})
-
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Invoice", Count: 1})
-	later := appendTestEvents(t, controlDB, eventStore, 1, "Invoice")
-	expectedSkipTo := later[0].GlobalPosition
-
-	waitForErr(t, time.Second, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-			return fmt.Errorf("checkpoint=%d want 0 before stale threshold", checkpoint)
-		}
-		return nil
-	})
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if skips := getGapSkipRows(t, controlDB, projection.Name()); len(skips) != 1 {
-			return fmt.Errorf("gap skips=%d want 1", len(skips))
-		}
-		return nil
-	})
-
-	projector.stop(t)
-	held.Rollback(t)
-
-	skips := getGapSkipRows(t, controlDB, projection.Name())
-	if len(skips) != 1 {
-		t.Fatalf("gap skips=%d want 1", len(skips))
-	}
-	if skips[0].GapPosition != held.events[0].GlobalPosition {
-		t.Fatalf("gap position=%d want %d", skips[0].GapPosition, held.events[0].GlobalPosition)
-	}
-	if skips[0].SkipToPosition != expectedSkipTo {
-		t.Fatalf("skip_to_position=%d want %d", skips[0].SkipToPosition, expectedSkipTo)
-	}
-	if skips[0].HighestVisiblePosition != expectedSkipTo {
-		t.Fatalf("highest_visible_position=%d want %d", skips[0].HighestVisiblePosition, expectedSkipTo)
-	}
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != expectedSkipTo {
-		t.Fatalf("checkpoint=%d want %d", checkpoint, expectedSkipTo)
-	}
-	rows := getHandledRows(t, controlDB, projection.Name())
-	if len(rows) != 1 {
-		t.Fatalf("handled rows=%d want 1", len(rows))
-	}
-	if rows[0].GlobalPosition != expectedSkipTo {
-		t.Fatalf("handled position=%d want %d", rows[0].GlobalPosition, expectedSkipTo)
-	}
 }
 
 func TestCheckpointCorrectness_RestartResumesFromPersistedCheckpoint(t *testing.T) {
@@ -645,7 +434,7 @@ func TestCheckpointCorrectness_RestartResumesFromPersistedCheckpoint(t *testing.
 	})
 
 	first := appendTestEvents(t, controlDB, eventStore, 3, "Shipment")
-	firstLatest := first[len(first)-1].GlobalPosition
+	firstLatest := cursorOf(first)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2"} {
@@ -653,7 +442,7 @@ func TestCheckpointCorrectness_RestartResumesFromPersistedCheckpoint(t *testing.
 				return fmt.Errorf("%s handled %d rows, want 3", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != firstLatest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, firstLatest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, firstLatest)
 			}
 		}
 		return nil
@@ -662,7 +451,7 @@ func TestCheckpointCorrectness_RestartResumesFromPersistedCheckpoint(t *testing.
 	projector1.stop(t)
 
 	second := appendTestEvents(t, controlDB, eventStore, 2, "Shipment")
-	finalLatest := second[len(second)-1].GlobalPosition
+	finalLatest := cursorOf(second)
 
 	projector2 := startTestProjector(t, "projector-2", []*testProjection{
 		newTestProjection("projection-1", "projector-2", nil),
@@ -684,10 +473,10 @@ func TestCheckpointCorrectness_RestartResumesFromPersistedCheckpoint(t *testing.
 				return fmt.Errorf("%s handled %d rows, want 5", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != finalLatest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, finalLatest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, finalLatest)
 			}
 		}
-		labels := handledByAfter(t, controlDB, firstLatest)
+		labels := handledByAfter(t, controlDB, firstLatest.GlobalPosition)
 		if len(labels) != 1 || labels[0] != "projector-2" {
 			return fmt.Errorf("post-restart events handled by %v want only projector-2", labels)
 		}
@@ -756,7 +545,7 @@ func TestLeaderFailover_NewLeaderElectedAndRebalancingContinues(t *testing.T) {
 	})
 
 	appended := appendTestEvents(t, controlDB, eventStore, 2, "Invoice")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
@@ -764,7 +553,7 @@ func TestLeaderFailover_NewLeaderElectedAndRebalancingContinues(t *testing.T) {
 				return fmt.Errorf("%s handled %d rows, want 2", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != latest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, latest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, latest)
 			}
 		}
 		labels := handledByAfter(t, controlDB, 0)
@@ -838,7 +627,7 @@ func TestLeaseLeaderFailover_NewLeaderElectedAndRebalancingContinues(t *testing.
 	})
 
 	appended := appendTestEvents(t, controlDB, eventStore, 2, "Invoice")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		for _, name := range []string{"projection-1", "projection-2", "projection-3", "projection-4"} {
@@ -846,7 +635,7 @@ func TestLeaseLeaderFailover_NewLeaderElectedAndRebalancingContinues(t *testing.
 				return fmt.Errorf("%s handled %d rows, want 2", name, len(rows))
 			}
 			if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != latest {
-				return fmt.Errorf("%s checkpoint=%d want %d", name, checkpoint, latest)
+				return fmt.Errorf("%s checkpoint=%+v want %+v", name, checkpoint, latest)
 			}
 		}
 		labels := handledByAfter(t, controlDB, 0)
@@ -1083,13 +872,14 @@ func TestProjector_SplitBrain_OwnershipLost(t *testing.T) {
 
 	// Append first event
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Invoice")
-	latest := appended[len(appended)-1].GlobalPosition
+	latestPos := appended[len(appended)-1].GlobalPosition
+	latestCursor := cursorOf(appended)
 
 	// Verify projector-1 processes first event
 	waitForErr(t, defaultWaitTimeout, func() error {
 		rows := getHandledRows(t, controlDB, projection.Name())
-		if len(rows) != 1 || rows[0].GlobalPosition != latest {
-			return fmt.Errorf("handled rows=%v want position %d", rows, latest)
+		if len(rows) != 1 || rows[0].GlobalPosition != latestPos {
+			return fmt.Errorf("handled rows=%v want position %d", rows, latestPos)
 		}
 		return nil
 	})
@@ -1108,7 +898,7 @@ func TestProjector_SplitBrain_OwnershipLost(t *testing.T) {
 
 	// Append second event
 	moreAppended := appendTestEvents(t, controlDB, eventStore, 1, "Invoice")
-	moreLatest := moreAppended[len(moreAppended)-1].GlobalPosition
+	moreLatest := cursorOf(moreAppended)
 
 	// Verify that projector-1 does NOT process the second event because it lost ownership
 	time.Sleep(1200 * time.Millisecond)
@@ -1117,8 +907,8 @@ func TestProjector_SplitBrain_OwnershipLost(t *testing.T) {
 		t.Fatalf("expected handled rows to stay at 1, but got %d (projector-1 processed event after losing ownership)", len(rows))
 	}
 	checkpoint := getCheckpoint(t, controlDB, projection.Name())
-	if checkpoint != latest {
-		t.Fatalf("expected checkpoint to stay at %d, but got %d (moreLatest=%d)", latest, checkpoint, moreLatest)
+	if checkpoint != latestCursor {
+		t.Fatalf("expected checkpoint to stay at %+v, but got %+v (moreLatest=%+v)", latestCursor, checkpoint, moreLatest)
 	}
 
 	projector1.stop(t)
@@ -1316,7 +1106,7 @@ func TestDispatcher_NotifyDispatcher_Reconnection(t *testing.T) {
 	// Append event and verify wakeup occurs promptly (well before the 5s polling interval)
 	start := time.Now()
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Wakeup")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, 2*time.Second, func() error {
 		rows := getHandledRows(t, controlDB, projection.Name())
@@ -1324,7 +1114,7 @@ func TestDispatcher_NotifyDispatcher_Reconnection(t *testing.T) {
 			return fmt.Errorf("projection handled %d rows, want 1", len(rows))
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})

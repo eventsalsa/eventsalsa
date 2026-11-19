@@ -6,7 +6,7 @@
 //
 // Two strategies are provided:
 //
-//   - PollDispatcher periodically queries the latest global position. This is the
+//   - PollDispatcher periodically queries the latest settled event cursor. This is the
 //     default strategy because it works with standard PostgreSQL deployments,
 //     PgBouncer, and PostgreSQL proxies.
 //   - NotifyDispatcher uses PostgreSQL LISTEN/NOTIFY for lower-latency wakeups and

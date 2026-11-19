@@ -14,31 +14,31 @@ import (
 	"eventsalsa.dev/store"
 )
 
-type mockPositionQuerier struct {
-	positions []int64
-	errors    []error
-	calls     int
-	mu        sync.Mutex
+type mockHeadQuerier struct {
+	heads  []store.Cursor
+	errors []error
+	calls  int
+	mu     sync.Mutex
 }
 
-func (m *mockPositionQuerier) GetLatestGlobalPosition(_ context.Context, _ pgx.Tx) (int64, error) {
+func (m *mockHeadQuerier) GetHead(_ context.Context, _ pgx.Tx) (store.Cursor, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	idx := m.calls
-	if idx >= len(m.positions) {
-		idx = len(m.positions) - 1
+	if idx >= len(m.heads) {
+		idx = len(m.heads) - 1
 	}
 	m.calls++
 
 	if idx < len(m.errors) && m.errors[idx] != nil {
-		return 0, m.errors[idx]
+		return store.Cursor{}, m.errors[idx]
 	}
 
-	return m.positions[idx], nil
+	return m.heads[idx], nil
 }
 
-func (m *mockPositionQuerier) CallCount() int {
+func (m *mockHeadQuerier) CallCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -75,8 +75,37 @@ func newMockDB() *mockTxBeginner {
 	return &mockTxBeginner{}
 }
 
+func cur(txID uint64, pos int64) store.Cursor {
+	return store.Cursor{TransactionID: txID, GlobalPosition: pos}
+}
+
 func TestPollDispatcherSendsWakeupWhenPositionAdvances(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{5, 5, 6}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 5), cur(10, 5), cur(10, 6)}}
+	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- dispatcher.Start(ctx)
+	}()
+
+	waitForWakeup(t, dispatcher.WakeupChan())
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not stop after cancellation")
+	}
+}
+
+func TestPollDispatcherSendsWakeupOnHigherXIDWithLowerPosition(t *testing.T) {
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(9, 99), cur(10, 1)}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -101,7 +130,7 @@ func TestPollDispatcherSendsWakeupWhenPositionAdvances(t *testing.T) {
 }
 
 func TestPollDispatcherBroadcastsWakeupToAllWaiters(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{5, 5, 6}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 5), cur(10, 5), cur(11, 6)}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,8 +168,8 @@ func TestPollDispatcherBroadcastsWakeupToAllWaiters(t *testing.T) {
 	}
 }
 
-func TestPollDispatcherDoesNotSendWakeupWhenPositionUnchanged(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{5, 5, 5, 5}}
+func TestPollDispatcherDoesNotSendWakeupWhenCursorUnchangedOrRegressing(t *testing.T) {
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 5), cur(10, 5), cur(9, 99), cur(10, 4)}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,7 +197,7 @@ func TestPollDispatcherDoesNotSendWakeupWhenPositionUnchanged(t *testing.T) {
 }
 
 func TestPollDispatcherRespectsContextCancellation(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{2, 2, 2}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 2), cur(10, 2)}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -190,7 +219,7 @@ func TestPollDispatcherRespectsContextCancellation(t *testing.T) {
 }
 
 func TestPollDispatcherRejectsConcurrentStart(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{2, 2, 2}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 2)}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,7 +255,9 @@ func TestPollDispatcherRejectsConcurrentStart(t *testing.T) {
 }
 
 func TestPollDispatcherNonBlockingWakeupOnRepeatedSignals(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{1, 2, 3, 4, 5, 6, 7}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{
+		cur(1, 1), cur(2, 2), cur(3, 3), cur(4, 4), cur(5, 5), cur(6, 6), cur(7, 7),
+	}}
 	dispatcher := NewPollDispatcher(newMockDB(), querier, time.Millisecond, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -262,7 +293,7 @@ func TestPollDispatcherNonBlockingWakeupOnRepeatedSignals(t *testing.T) {
 }
 
 func TestPollDispatcherStartRejectsNilDB(t *testing.T) {
-	dispatcher := NewPollDispatcher(nil, &mockPositionQuerier{positions: []int64{1}}, time.Millisecond, store.NoOpLogger{})
+	dispatcher := NewPollDispatcher(nil, &mockHeadQuerier{heads: []store.Cursor{cur(1, 1)}}, time.Millisecond, store.NoOpLogger{})
 
 	if err := dispatcher.Start(context.Background()); !errors.Is(err, ErrNilDB) {
 		t.Fatalf("Start() error = %v, want %v", err, ErrNilDB)
@@ -280,7 +311,7 @@ func TestPollDispatcherStartRejectsNilQuerier(t *testing.T) {
 func TestPollDispatcherStartReturnsInitialQueryError(t *testing.T) {
 	dispatcher := NewPollDispatcher(
 		newMockDB(),
-		&mockPositionQuerier{positions: []int64{0}, errors: []error{errors.New("latest position failed")}},
+		&mockHeadQuerier{heads: []store.Cursor{{}}, errors: []error{errors.New("latest head failed")}},
 		time.Millisecond,
 		store.NoOpLogger{},
 	)
@@ -289,7 +320,7 @@ func TestPollDispatcherStartReturnsInitialQueryError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Start() error = nil, want initialization error")
 	}
-	if !strings.Contains(err.Error(), "initialize poll dispatcher checkpoint: latest position failed") {
+	if !strings.Contains(err.Error(), "initialize poll dispatcher checkpoint: latest head failed") {
 		t.Fatalf("Start() error = %v, want wrapped initialization error", err)
 	}
 }

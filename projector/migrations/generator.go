@@ -25,9 +25,6 @@ type Config struct {
 	// ProjectionCheckpointsTable is the name of the projection checkpoint table.
 	ProjectionCheckpointsTable string
 
-	// ProjectionGapSkipsTable is the name of the projection gap skip audit table.
-	ProjectionGapSkipsTable string
-
 	// ProjectorLeaderLeasesTable is the name of the leader election lease table.
 	ProjectorLeaderLeasesTable string
 }
@@ -42,7 +39,6 @@ func DefaultConfig() Config {
 		ProjectorInstancesTable:    "projector_instances",
 		ProjectionAssignmentsTable: "projection_assignments",
 		ProjectionCheckpointsTable: "projection_checkpoints",
-		ProjectionGapSkipsTable:    "projection_gap_skips",
 		ProjectorLeaderLeasesTable: "projector_leader_leases",
 	}
 }
@@ -72,7 +68,6 @@ func generatePostgresSQL(config *Config) string {
 		normalized.ProjectorInstancesTable,
 		normalized.ProjectionAssignmentsTable,
 		normalized.ProjectionCheckpointsTable,
-		normalized.ProjectionGapSkipsTable,
 		normalized.ProjectorLeaderLeasesTable,
 	)
 
@@ -82,8 +77,7 @@ func generatePostgresSQL(config *Config) string {
 -- These tables coordinate distributed projection execution:
 -- - %s tracks projector instances and heartbeats
 -- - %s maps projections to projector instances
--- - %s stores each projection's last processed global position
--- - %s stores durable stale-gap advancement records
+-- - %s stores each projection's last processed event cursor (last_transaction_id, last_position)
 -- - %s manages active leader leases
 %s
 CREATE TABLE IF NOT EXISTS %s (
@@ -108,24 +102,11 @@ CREATE INDEX IF NOT EXISTS idx_%s_instance
 
 CREATE TABLE IF NOT EXISTS %s (
     projection_name TEXT PRIMARY KEY,
+    last_transaction_id xid8 NOT NULL DEFAULT '0',
     last_position BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE TABLE IF NOT EXISTS %s (
-    id BIGSERIAL PRIMARY KEY,
-    projection_name TEXT NOT NULL,
-    instance_id UUID NOT NULL,
-    gap_position BIGINT NOT NULL,
-    skip_to_position BIGINT NOT NULL,
-    highest_visible_position BIGINT NOT NULL,
-    first_seen_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_%s_projection
-    ON %s (projection_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS %s (
     lease_key TEXT PRIMARY KEY,
@@ -139,7 +120,6 @@ CREATE TABLE IF NOT EXISTS %s (
 		normalized.ProjectorInstancesTable,
 		normalized.ProjectionAssignmentsTable,
 		normalized.ProjectionCheckpointsTable,
-		normalized.ProjectionGapSkipsTable,
 		normalized.ProjectorLeaderLeasesTable,
 		schemaDDL,
 		normalized.ProjectorInstancesTable,
@@ -148,8 +128,6 @@ CREATE TABLE IF NOT EXISTS %s (
 		normalized.ProjectorInstancesTable,
 		indexNameComponent(normalized.ProjectionAssignmentsTable), normalized.ProjectionAssignmentsTable,
 		normalized.ProjectionCheckpointsTable,
-		normalized.ProjectionGapSkipsTable,
-		indexNameComponent(normalized.ProjectionGapSkipsTable), normalized.ProjectionGapSkipsTable,
 		normalized.ProjectorLeaderLeasesTable,
 		normalized.ProjectorInstancesTable,
 	)
@@ -175,9 +153,6 @@ func normalizeConfig(config *Config) Config {
 	}
 	if config.ProjectionCheckpointsTable != "" {
 		normalized.ProjectionCheckpointsTable = config.ProjectionCheckpointsTable
-	}
-	if config.ProjectionGapSkipsTable != "" {
-		normalized.ProjectionGapSkipsTable = config.ProjectionGapSkipsTable
 	}
 	if config.ProjectorLeaderLeasesTable != "" {
 		normalized.ProjectorLeaderLeasesTable = config.ProjectorLeaderLeasesTable

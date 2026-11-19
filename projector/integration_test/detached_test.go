@@ -205,14 +205,14 @@ func TestDetachedProjection_ProcessesAndAdvancesCheckpoint(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, defaultProjectorOptions()...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 5, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if count := projection.AppliedCount(); count != 5 {
 			return fmt.Errorf("detached applied %d events, want 5", count)
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})
@@ -242,7 +242,7 @@ func TestDetachedProjection_ApplyErrorDoesNotAdvanceCheckpoint(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 2, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		select {
@@ -253,15 +253,15 @@ func TestDetachedProjection_ApplyErrorDoesNotAdvanceCheckpoint(t *testing.T) {
 		}
 	})
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d want 0 while the destination is failing", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v want zero while the destination is failing", checkpoint)
 	}
 
 	projection.SetError(nil)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovery", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovery", checkpoint, latest)
 		}
 		return nil
 	})
@@ -370,11 +370,11 @@ func TestBatchTransactionalProjection_HandlesWindowInOneCall(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, defaultProjectorOptions()...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 5, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})
@@ -412,7 +412,7 @@ func TestBatchTransactionalProjection_ErrorRollsBackWholeBatch(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if projection.Calls() == 0 {
@@ -424,8 +424,8 @@ func TestBatchTransactionalProjection_ErrorRollsBackWholeBatch(t *testing.T) {
 	if rows := getHandledRows(t, controlDB, projection.Name()); len(rows) != 0 {
 		t.Fatalf("read model rows = %d, want 0 while the batch is failing", len(rows))
 	}
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d want 0 while the batch is failing", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v want zero while the batch is failing", checkpoint)
 	}
 
 	projection.SetError(nil)
@@ -435,7 +435,7 @@ func TestBatchTransactionalProjection_ErrorRollsBackWholeBatch(t *testing.T) {
 			return fmt.Errorf("read model rows = %d, want 3 after recovery", len(rows))
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})
@@ -460,11 +460,11 @@ func TestRegistrationEventTypeFilter_AdvancesCheckpointPastSkippedEvents(t *test
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, defaultProjectorOptions()...)
 
 	appended := appendTestEventBatches(t, controlDB, eventStore, testEventBatch{StreamType: "Order", Count: 2})
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d (unscoped frontier)", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v (MVCC horizon cursor)", checkpoint, latest)
 		}
 		rows := getHandledRows(t, controlDB, projection.Name())
 		if len(rows) != 1 {
@@ -506,7 +506,7 @@ func TestBatchTimeout_CancelsBlockedHandlerWithoutAdvancingCheckpoint(t *testing
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		select {
@@ -522,15 +522,15 @@ func TestBatchTimeout_CancelsBlockedHandlerWithoutAdvancingCheckpoint(t *testing
 	if rows := getHandledRows(t, controlDB, projection.Name()); len(rows) != 0 {
 		t.Fatalf("read model rows = %d, want 0 after the batch timeout", len(rows))
 	}
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d want 0 after the batch timeout", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v want zero after the batch timeout", checkpoint)
 	}
 
 	close(gate)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovery", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovery", checkpoint, latest)
 		}
 		return nil
 	})

@@ -12,7 +12,7 @@ At a practical level, the component covers:
 - running projections outside the request path for eventual consistency
 - scaling projections deterministically across multiple projector instances
 - checkpoint management and read-model updates across both PostgreSQL and external data stores
-- gap-aware frontier progression under concurrent out-of-order sequence commits
+- PostgreSQL MVCC visibility-horizon progression ordered by composite `(transaction_id, global_position)` cursors (`store.Cursor`)
 - configurable error classification, failure policies, and dead-letter handling
 - pluggable real-time telemetry and metrics through a lightweight `Observer` interface
 
@@ -49,7 +49,6 @@ go run eventsalsa.dev/projector/cmd/migrate-gen \
   -projector-instances-table infra.projector_instances \
   -projection-assignments-table infra.projection_assignments \
   -projection-checkpoints-table infra.projection_checkpoints \
-  -projection-gap-skips-table infra.projection_gap_skips \
   -projector-leader-leases-table infra.projector_leader_leases
 ```
 
@@ -71,7 +70,6 @@ func main() {
 	config.ProjectorInstancesTable = "infra.projector_instances"
 	config.ProjectionAssignmentsTable = "infra.projection_assignments"
 	config.ProjectionCheckpointsTable = "infra.projection_checkpoints"
-	config.ProjectionGapSkipsTable = "infra.projection_gap_skips"
 	config.ProjectorLeaderLeasesTable = "infra.projector_leader_leases"
 
 	if err := migrations.GeneratePostgres(&config); err != nil {
@@ -80,15 +78,14 @@ func main() {
 }
 ```
 
-The generated migration creates five tables:
+The generated migration creates four tables:
 
 - `projector_instances`: tracks active projector instances and heartbeats
 - `projection_assignments`: maps projections to live instances
-- `projection_checkpoints`: stores each projection's last processed global position
-- `projection_gap_skips`: durable audit trail for stale-gap safe-harbor advancements
+- `projection_checkpoints`: stores each projection's last processed `(last_transaction_id, last_position)` cursor
 - `projector_leader_leases`: manages active leader election leases
 
-These tables form the projector's control plane. They hold coordination state, ownership, checkpoints, and gap audit history rather than business domain data. When table names specify PostgreSQL schema prefixes, matching `CREATE SCHEMA IF NOT EXISTS ...` statements are emitted automatically.
+These tables form the projector's control plane. They hold coordination state, ownership, and composite checkpoints rather than business domain data. When table names specify PostgreSQL schema prefixes, matching `CREATE SCHEMA IF NOT EXISTS ...` statements are emitted automatically.
 
 ## Minimum example
 
@@ -192,8 +189,6 @@ daemon := projector.New(
 	projector.WithHeartbeatInterval(5*time.Second),
 	projector.WithHeartbeatTimeout(30*time.Second),
 	projector.WithRebalanceInterval(5*time.Second),
-	projector.WithStaleGapThreshold(30*time.Second),
-	projector.WithStaleGapHarborLag(8),
 	projector.WithDispatcherStrategy(projector.DispatcherStrategyPoll),
 	projector.WithLeaderStrategy(projector.LeaderStrategyLease),
 	projector.WithProjectorLeaderLeasesTable("projector_leader_leases"),
@@ -217,8 +212,6 @@ daemon := projector.New(
 | `WithHeartbeatInterval(d)` | `5s` | How frequently an instance refreshes its liveness heartbeat. |
 | `WithHeartbeatTimeout(d)` | `30s` | Age after which an instance is considered dead by the leader. |
 | `WithRebalanceInterval(d)` | `5s` | How frequently the leader evaluates projection assignment rebalancing. |
-| `WithStaleGapThreshold(d)` | `30s` | Duration to wait on a missing sequence position before safe-harbor skipping. |
-| `WithStaleGapHarborLag(n)` | `8` | Distance behind visible head maintained during stale-gap advancement. |
 | `WithDispatcherStrategy(strategy)` | `poll` | Wakeup strategy: `DispatcherStrategyPoll` or `DispatcherStrategyNotify`. |
 | `WithNotifyConnectionString(connStr)` | empty | Dedicated PostgreSQL connection string for `LISTEN`/`NOTIFY`. |
 | `WithNotifyChannel(channel)` | empty | Notification channel for notify-based dispatching. |
@@ -227,7 +220,6 @@ daemon := projector.New(
 | `WithProjectorInstancesTable(name)` | `projector_instances` | Instance registration table name. |
 | `WithProjectionAssignmentsTable(name)` | `projection_assignments` | Projection assignment table name. |
 | `WithProjectionCheckpointsTable(name)` | `projection_checkpoints` | Checkpoint tracking table name. |
-| `WithProjectionGapSkipsTable(name)` | `projection_gap_skips` | Stale-gap audit table name. |
 | `WithObserver(observer)` | `nil` | Pluggable telemetry and lifecycle listener. |
 | `WithLogger(logger)` | `store.NoOpLogger{}` | Structured logger integration. |
 
@@ -266,7 +258,7 @@ _ = registry.Add(&OrderOverviewProjection{}, projector.OnStreamTypes("Order"))
 _ = registry.Add(&AuditLogProjection{}, projector.OnEventTypes("UserRegistered", "PasswordReset"))
 ```
 
-Events that do not match the filter are skipped cleanly in memory without invoking `Handle`, while the projection checkpoint still advances safely to the unscoped frontier of the batch window.
+Events that do not match the filter are skipped cleanly in memory without invoking `Handle`, while the projection checkpoint still advances safely to the unscoped batch cursor `(last_transaction_id, last_position)`.
 
 ## Projection shapes: batching and external read models
 
@@ -300,6 +292,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -327,6 +320,7 @@ func (p *ProductDailySalesProjection) Handle(ctx context.Context, tx pgx.Tx, eve
 	type bucketDelta struct {
 		unitsSold    int64
 		revenueCents int64
+		lastTxID     uint64
 		lastPos      int64
 	}
 
@@ -353,6 +347,7 @@ func (p *ProductDailySalesProjection) Handle(ctx context.Context, tx pgx.Tx, eve
 		}
 		d.unitsSold += int64(line.Quantity)
 		d.revenueCents += int64(line.Quantity) * line.UnitPriceCents
+		d.lastTxID = event.TransactionID
 		d.lastPos = event.GlobalPosition
 	}
 
@@ -365,6 +360,7 @@ func (p *ProductDailySalesProjection) Handle(ctx context.Context, tx pgx.Tx, eve
 	skus := make([]string, 0, len(deltas))
 	units := make([]int64, 0, len(deltas))
 	revenues := make([]int64, 0, len(deltas))
+	txIDs := make([]string, 0, len(deltas))
 	positions := make([]int64, 0, len(deltas))
 
 	for k, d := range deltas {
@@ -372,18 +368,21 @@ func (p *ProductDailySalesProjection) Handle(ctx context.Context, tx pgx.Tx, eve
 		skus = append(skus, k.sku)
 		units = append(units, d.unitsSold)
 		revenues = append(revenues, d.revenueCents)
+		txIDs = append(txIDs, strconv.FormatUint(d.lastTxID, 10))
 		positions = append(positions, d.lastPos)
 	}
 
 	_, err := tx.Exec(ctx, `
-		INSERT INTO product_daily_sales_v1 (sale_date, sku, units_sold, revenue_cents, last_global_position)
-		SELECT * FROM UNNEST($1::date[], $2::text[], $3::bigint[], $4::bigint[], $5::bigint[])
+		INSERT INTO product_daily_sales_v1 (sale_date, sku, units_sold, revenue_cents, last_transaction_id, last_global_position)
+		SELECT * FROM UNNEST($1::date[], $2::text[], $3::bigint[], $4::bigint[], $5::text[]::xid8[], $6::bigint[])
 		ON CONFLICT (sale_date, sku) DO UPDATE
 		SET units_sold           = product_daily_sales_v1.units_sold + EXCLUDED.units_sold,
 		    revenue_cents        = product_daily_sales_v1.revenue_cents + EXCLUDED.revenue_cents,
+		    last_transaction_id  = EXCLUDED.last_transaction_id,
 		    last_global_position = EXCLUDED.last_global_position
-		WHERE product_daily_sales_v1.last_global_position < EXCLUDED.last_global_position
-	`, days, skus, units, revenues, positions)
+		WHERE (product_daily_sales_v1.last_transaction_id, product_daily_sales_v1.last_global_position)
+		    < (EXCLUDED.last_transaction_id, EXCLUDED.last_global_position)
+	`, days, skus, units, revenues, txIDs, positions)
 	return err
 }
 ```
@@ -399,9 +398,9 @@ _ = registry.AddBatch(&ProductDailySalesProjection{}, projector.OnEventTypes("Or
 Use `DetachedBatchProjection` when your read model lives **outside PostgreSQL** and the destination provides a **bulk ingestion API**—such as **Typesense**, Elasticsearch, OpenSearch, or ClickHouse.
 
 Instead of holding a PostgreSQL transaction open during external network calls or issuing hundreds of individual HTTP requests, the daemon:
-1. Probes the safe event frontier and releases the database connection.
+1. Reads the committed MVCC batch window and releases the database connection.
 2. Calls `Handle(ctx, events)` with **no database transaction or row locks held**.
-3. Persists the updated checkpoint in a short, separate transaction once `Handle` succeeds.
+3. Persists the updated composite checkpoint in a short, separate transaction once `Handle` succeeds.
 
 Here is an example indexing catalog events into **Typesense** using its bulk document import endpoint (`upsert` action) rather than singular document mutations:
 
@@ -666,8 +665,6 @@ The projector daemon exposes internal runtime events and metrics via a pluggable
 type Observer interface {
 	OnBatchProcessed(ctx context.Context, stats BatchStats)
 	OnHeartbeat(ctx context.Context, stats DaemonStats)
-	OnGapDetected(ctx context.Context, stats GapStats)
-	OnGapSkipped(ctx context.Context, stats GapStats)
 	OnProjectionDegraded(ctx context.Context, stats DegradedStats)
 	OnPoisonBatchSkipped(ctx context.Context, stats PoisonBatchStats)
 	OnRebalance(ctx context.Context, assignments map[string]uuid.UUID)
@@ -676,11 +673,10 @@ type Observer interface {
 
 ### Telemetry data structures
 
-- **`BatchStats`**: contains batch execution latency (`Duration`), global checkpoint positions (`StartPosition`, `LastPosition`, `HeadPosition`), calculated event lag (`Lag = max(0, HeadPosition - LastPosition)`), throughput counts (`EventsRead` for the window and `EventsHandled` for events applied after registration filtering), safe-harbor stale skip indicator (`StaleSkipped`), detached execution flag (`Detached`), and error status (`Error`).
+- **`BatchStats`**: contains batch execution latency (`Duration`), composite checkpoint cursors (`StartTransactionID`/`StartPosition`, `LastTransactionID`/`LastPosition`, `HeadTransactionID`/`HeadPosition`), calculated event lag (`Lag = max(0, HeadPosition - LastPosition)`), throughput counts (`EventsRead` for the window and `EventsHandled` for events applied after registration filtering), detached execution flag (`Detached`), and error status (`Error`).
 - **`DaemonStats`**: contains instance UUID (`InstanceID`) and leadership status (`IsLeader`).
-- **`GapStats`**: contains projection name (`ProjectionName`), missing sequence coordinate (`GapPosition`), visible stream head (`HighestVisible`), and elapsed duration (`StaleFor`).
 - **`DegradedStats`**: contains projection name (`ProjectionName`), timestamp of the first failure in the current run (`FirstFailureAt`), consecutive failure count (`ConsecutiveFailures`), and the latest error (`LastError`), emitted whenever a projection fails without crashing the daemon.
-- **`PoisonBatchStats`**: contains projection name (`ProjectionName`), checkpoint target advanced to (`TargetPosition`), skipped event count (`EventCount`), and the permanent failure cause (`Cause`).
+- **`PoisonBatchStats`**: contains projection name (`ProjectionName`), composite checkpoint target skipped to (`TargetTransactionID`, `TargetPosition`), skipped event count (`EventCount`), and the permanent failure cause (`Cause`).
 
 ### Convenience utilities
 
@@ -767,7 +763,7 @@ The dispatcher detects when new events are committed so projection loops wake up
 
 ### Poll dispatcher
 
-`projector.DispatcherStrategyPoll` is the default. It periodically inspects the highest global position and wakes active projection loops whenever the position advances.
+`projector.DispatcherStrategyPoll` is the default. It periodically inspects the committed head cursor (`store.HeadReader.GetHead`) and wakes active projection loops whenever the cursor advances.
 
 This is recommended for:
 - standard deployments and microservices
@@ -939,36 +935,26 @@ func main() {
 
 1. **Connection Pool Sizing**: Ensure your shared `*pgxpool.Pool` has sufficient connections for all concurrent daemons:
    `PoolSize_min >= NumDaemons * (1 + MaxConcurrentProjections) + Headroom`
-   Note that detached projections (`DetachedProjection`, `DetachedBatchProjection`) do not hold a pooled database connection while applying to their external read model—they only acquire connections briefly during their frontier probe and checkpoint transactions.
+   Note that detached projections (`DetachedProjection`, `DetachedBatchProjection`) do not hold a pooled database connection while applying to their external read model—they only acquire connections briefly during their MVCC probe and checkpoint transactions.
 2. **Lease Tables vs Advisory Locks**: Multi-daemon deployments sharing a PostgreSQL database must use `projector.LeaderStrategyLease` with domain-specific lease tables (e.g. `schema.projector_leader_leases`). `projector.LeaderStrategyAdvisory` uses a single well-known lock key across the database, which would cause unrelated domain daemons to contend for leadership.
 3. **Distinct NOTIFY Channels**: When using `projector.DispatcherStrategyNotify`, assign each domain daemon a unique channel via `projector.WithNotifyChannel("domain_events")` to prevent wakeup crosstalk between different domain event streams.
 
-## Gaps, frontiers, and safe progress
+## MVCC visibility horizon and composite cursors
 
-In PostgreSQL, sequence values assigned to `global_position` guarantee uniqueness and monotonicity, but **not** transaction commit order. A transaction appending at position `100` might commit before a concurrent transaction appending at position `99`.
+In PostgreSQL, sequence values assigned to `global_position` guarantee uniqueness, but **not** transaction commit order. A transaction appending at position `100` can commit before a concurrent transaction appending at position `99`, and rolled-back transactions or savepoints leave permanent holes in the sequence.
 
-If a projector advanced naively to the highest position visible in a query, it could skip position `99` permanently if position `99` committed moments later.
+If a projector tailed only by `global_position`, it could permanently miss position `99` or stall waiting on a rolled-back sequence number.
 
-The projector runtime eliminates this race using an **unscoped frontier probe**:
+`eventsalsa/projector` eliminates sequence-order ambiguity completely by relying on PostgreSQL's MVCC snapshot horizon via `store.EventReader` and `store.HeadReader`:
 
-1. Read the projection's current checkpoint.
-2. Read a window of events starting from that checkpoint outside the batch transaction.
-3. Compute the contiguous prefix starting from `checkpoint + 1`.
-4. Process only events within that safe contiguous frontier.
-5. Persist the new checkpoint atomically with the projection batch (or in the short post-apply transaction for detached projections).
-
-### Stale gaps and safe-harbor recovery
-
-If an expected sequence number is missing (for example, due to an aborted transaction or a rolled-back append), the daemon pauses and retries for up to `StaleGapThreshold` (default `30s`).
-
-If the position remains missing after the threshold has elapsed, the daemon applies safe-harbor advancement: it advances the checkpoint past the gap, maintaining `StaleGapHarborLag` positions behind the highest visible head, and writes an audit record to `projection_gap_skips`. For detached projections, the daemon revalidates the stale-gap plan before applying and discards the checkpoint write if the missing position appeared while the external apply was in flight.
-
-This prevents a projection from being stalled indefinitely while maintaining a permanent record of skipped sequence numbers for operational audit.
+1. Every persisted event carries both PostgreSQL's transaction identifier (`transaction_id xid8`) and sequence number (`global_position`).
+2. `ReadEvents` and `GetHead` filter strictly with `transaction_id < pg_snapshot_xmin(pg_current_snapshot())`, ordered ascending by `(transaction_id, global_position)`.
+3. Because `pg_snapshot_xmin` stays below any uncommitted transaction holding an XID, committed higher-XID writes wait automatically while older concurrent transactions are in flight—and advance immediately as soon as those older transactions commit or roll back.
+4. Checkpoints persist the composite cursor `(last_transaction_id, last_position)` monotonically in `projection_checkpoints`, delivering out-of-order commits exactly in commit-visibility order without missing lower positions or stalling on aborted writes.
 
 ## Operational best practices
 
 - **Stable Projection Names**: `Name()` is the projection's identity for checkpoints and distributed assignments. Keep projection names stable across releases.
 - **Choose the Right Projection Shape**: Use `Projection` or `BatchProjection` when the read model lives in the same PostgreSQL database so mutations and checkpoints commit atomically; use `DetachedBatchProjection` or `DetachedProjection` for external systems so network I/O never holds PostgreSQL connections or locks.
-- **Short Write Transactions**: Keep store `Append` transactions short on the write side to minimize sequence visibility delays.
+- **Keep Write Transactions Short**: `pg_snapshot_xmin(pg_current_snapshot())` reflects the lowest active XID in the database cluster. Avoid holding open or `idle in transaction` write sessions with assigned XIDs so visibility horizon progression is never pinned. Configure `idle_in_transaction_session_timeout` in PostgreSQL.
 - **Monitor Projection Lag and Degradation**: Use the `Observer` interface (`OnBatchProcessed`, `OnProjectionDegraded`, `OnPoisonBatchSkipped`) with Prometheus or structured logs to monitor `Lag`, `Duration`, and retry loops.
-- **Audit Gap Skips**: Periodically inspect `projection_gap_skips` in PostgreSQL to ensure no unexpected sequence holes occur in production.

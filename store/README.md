@@ -210,40 +210,41 @@ stream, err = s.ReadStream(ctx, tx, "User", userID, &from, &to)
 
 ### Sequential Reads
 
-`ReadEvents` reads from the raw global log in position order, which is the basis for building consumers
-and projections.
-
-Because `global_position` is sequence-backed, these positions are unique and sortable but not a safe
-naive checkpoint frontier under concurrent writers. Async consumers that persist checkpoints should use a
-gap-aware worker/runtime rather than blindly advancing to the highest seen position.
+`ReadEvents` reads committed events from the global log behind PostgreSQL's active transaction visibility
+horizon (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`) in `(transaction_id, global_position)`
+order, using a composite `store.Cursor` (`TransactionID` + `GlobalPosition`).
 
 ```go
-// Read up to 500 events after global position 0
-events, err := s.ReadEvents(ctx, tx, 0, 500)
+// Read up to 500 settled events from the beginning of the global log
+events, err := s.ReadEvents(ctx, tx, store.Cursor{}, 500)
 
-// Continue from last processed position
-events, err = s.ReadEvents(ctx, tx, lastPosition, 500)
+// Continue from the last processed event cursor
+last := events[len(events)-1]
+lastCursor := store.Cursor{
+    TransactionID:  last.TransactionID,
+    GlobalPosition: last.GlobalPosition,
+}
+events, err = s.ReadEvents(ctx, tx, lastCursor, 500)
 ```
 
-`GetLatestGlobalPosition` returns the highest position currently visible in the log — useful for
-lightweight wakeup or polling checks without fetching full batches. It is not a safe contiguous
-high-water mark for checkpoint advancement under concurrent writers.
+`GetHead` returns the highest `store.Cursor` (`TransactionID`, `GlobalPosition`) currently visible
+behind `pg_snapshot_xmin(pg_current_snapshot())` — useful for lightweight wakeup or polling checks
+without fetching full batches.
 
 ```go
-latest, err := s.GetLatestGlobalPosition(ctx, tx)
+head, err := s.GetHead(ctx, tx)
 ```
 
-> **Checkpoint safety under concurrent writers:** `global_position` is backed by a PostgreSQL
-> `BIGSERIAL` sequence, which guarantees uniqueness but not commit order. Under concurrent
-> writers, a lower position may become visible after a higher one has already been returned.
-> Advancing a checkpoint to the highest seen position without accounting for in-flight gaps
-> can permanently skip events. Async consumers must use a gap-aware worker or runtime — do
-> not treat the highest position returned by `ReadEvents` or `GetLatestGlobalPosition`
-> as a safe naive checkpoint frontier under concurrent writers.
+> **Do not tail by raw `global_position`:** If you query the `events` SQL table directly or track
+> checkpoints using `global_position` alone (`WHERE global_position > $1`), concurrent writers can
+> permanently skip events. PostgreSQL `BIGSERIAL` sequences guarantee uniqueness, not commit order
+> — an in-flight transaction holding a lower `global_position` can commit after a higher one. Always
+> tail the global log using `store.Cursor` behind `pg_snapshot_xmin` via `ReadEvents` / `GetHead`
+> (or `eventsalsa.dev/projector`, which manages checkpoints automatically).
 
-Scoped async filtering is intentionally a worker/runtime concern rather than a store read primitive.
-If a consumer needs to react to only some stream types, establish a safe frontier from the unscoped
-global stream first, then filter inside the runtime.
+Scoped async filtering is intentionally a runtime concern rather than a store read primitive.
+If a consumer only acts on specific stream or event types, advance checkpoints using the unscoped
+`store.Cursor` returned for each read window and filter matching events inside the handler (`eventsalsa.dev/projector` does this out of the box).
 
 ## PostgreSQL Implementation
 

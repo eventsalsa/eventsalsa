@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
 
 	projectorpostgres "eventsalsa.dev/projector/postgres"
@@ -40,6 +41,7 @@ func TestComprehensiveScaleUpAndDown(t *testing.T) {
 
 	activeProjectors := make([]*testProjectorHarness, 0, 7)
 	allPositions := make([]int64, 0, 30)
+	var latestCursor store.Cursor
 
 	runRebalanceAssertions := func() {
 		t.Helper()
@@ -55,8 +57,7 @@ func TestComprehensiveScaleUpAndDown(t *testing.T) {
 				return err
 			}
 			if len(allPositions) > 0 {
-				latest := allPositions[len(allPositions)-1]
-				if err := checkProjectionsCaughtUp(t, controlDB, projectionNames, len(allPositions), latest); err != nil {
+				if err := checkProjectionsCaughtUp(t, controlDB, projectionNames, len(allPositions), latestCursor); err != nil {
 					return err
 				}
 			}
@@ -78,11 +79,11 @@ func TestComprehensiveScaleUpAndDown(t *testing.T) {
 		for _, event := range appended {
 			allPositions = append(allPositions, event.GlobalPosition)
 		}
-		latest := allPositions[len(allPositions)-1]
+		latestCursor = cursorOf(appended)
 		expectedCount := len(allPositions)
 
 		waitForErr(t, defaultWaitTimeout, func() error {
-			return checkProjectionsProcessedStep(t, controlDB, projectionNames, expectedCount, latest, cutoff, expectedLabels)
+			return checkProjectionsProcessedStep(t, controlDB, projectionNames, expectedCount, latestCursor, cutoff, expectedLabels)
 		})
 	}
 
@@ -133,12 +134,11 @@ func TestComprehensiveScaleUpAndDown(t *testing.T) {
 	runRebalanceAssertions()
 	runProcessingStep("ScaleDownFinal", []string{"projector-1"})
 
-	latest := allPositions[len(allPositions)-1]
-	if position := latestGlobalPosition(t, controlDB, eventStore); position != latest {
-		t.Fatalf("latest global position=%d want %d", position, latest)
+	if head := latestHead(t, controlDB, eventStore); head != latestCursor {
+		t.Fatalf("latest head=%+v want %+v", head, latestCursor)
 	}
 
-	assertAllEventsProcessedWithoutGaps(t, controlDB, projectionNames, allPositions, latest)
+	assertAllEventsProcessedOnce(t, controlDB, projectionNames, allPositions, latestCursor)
 }
 
 func assertBalancedAssignments(t *testing.T, db *pgxpool.Pool, expectedInstances int, totalProjections int, instanceIDs []uuid.UUID) {
@@ -209,7 +209,7 @@ func checkBalancedAssignments(t *testing.T, db *pgxpool.Pool, expectedInstances 
 	return nil
 }
 
-func assertAllEventsProcessedWithoutGaps(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedPositions []int64, latest int64) {
+func assertAllEventsProcessedOnce(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedPositions []int64, latest store.Cursor) {
 	t.Helper()
 
 	for _, projectionName := range projectionNames {
@@ -231,12 +231,12 @@ func assertAllEventsProcessedWithoutGaps(t *testing.T, db *pgxpool.Pool, project
 		}
 
 		if checkpoint := getCheckpoint(t, db, projectionName); checkpoint != latest {
-			t.Fatalf("%s checkpoint=%d want %d", projectionName, checkpoint, latest)
+			t.Fatalf("%s checkpoint=%+v want %+v", projectionName, checkpoint, latest)
 		}
 	}
 }
 
-func checkProjectionsProcessedStep(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedCount int, latest int64, cutoff int64, expectedLabels []string) error {
+func checkProjectionsProcessedStep(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedCount int, latest store.Cursor, cutoff int64, expectedLabels []string) error {
 	t.Helper()
 
 	if err := checkProjectionsCaughtUp(t, db, projectionNames, expectedCount, latest); err != nil {
@@ -261,7 +261,7 @@ func checkProjectionsProcessedStep(t *testing.T, db *pgxpool.Pool, projectionNam
 	return nil
 }
 
-func checkProjectionsCaughtUp(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedCount int, latest int64) error {
+func checkProjectionsCaughtUp(t *testing.T, db *pgxpool.Pool, projectionNames []string, expectedCount int, latest store.Cursor) error {
 	t.Helper()
 
 	for _, projectionName := range projectionNames {
@@ -270,7 +270,7 @@ func checkProjectionsCaughtUp(t *testing.T, db *pgxpool.Pool, projectionNames []
 			return fmt.Errorf("%s handled %d rows, want %d", projectionName, len(rows), expectedCount)
 		}
 		if checkpoint := getCheckpoint(t, db, projectionName); checkpoint != latest {
-			return fmt.Errorf("%s checkpoint=%d want %d", projectionName, checkpoint, latest)
+			return fmt.Errorf("%s checkpoint=%+v want %+v", projectionName, checkpoint, latest)
 		}
 	}
 

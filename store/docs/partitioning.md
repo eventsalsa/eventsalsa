@@ -10,7 +10,7 @@
 
 ### Why Partition on `global_position`?
 1. **Append-Only Monotonic Order**: All appends write sequentially into the newest partition. Older partition indexes become read-only and stay hot in the OS page cache.
-2. **Sequential Consumer Pagination**: Consumers reading `ReadEvents(ctx, tx, lastPos, limit)` scan contiguous ranges within one or two partitions at a time.
+2. **Sequential Consumer Pagination**: Consumers reading `ReadEvents(ctx, tx, lastCursor, limit)` advance monotonically in `(transaction_id, global_position)` order across partitions behind PostgreSQL's active visibility horizon (`pg_snapshot_xmin`).
 3. **Optimistic Concurrency Control**: In PostgreSQL, parent tables partitioned by `RANGE (global_position)` cannot enforce cross-partition `UNIQUE (stream_type, stream_id, stream_version)` because the partition key is not part of the unique tuple. To guarantee optimistic concurrency across partitions, `eventsalsa/store` uses the `stream_heads` table to atomically reserve stream version ranges before writing to `events`.
 
 ---

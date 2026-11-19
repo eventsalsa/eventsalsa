@@ -11,9 +11,9 @@ import (
 )
 
 func TestNotifyDispatcherReconcileSendsWakeupWhenPositionAdvances(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{6}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 6)}}
 	dispatcher := NewNotifyDispatcher("", "worker_events", newMockDB(), querier, store.NoOpLogger{})
-	dispatcher.lastPos = 5
+	dispatcher.lastHead = cur(10, 5)
 
 	// Capture channel before reconcile so we observe the close-and-replace signal.
 	ch := dispatcher.WakeupChan()
@@ -25,8 +25,22 @@ func TestNotifyDispatcherReconcileSendsWakeupWhenPositionAdvances(t *testing.T) 
 	waitForWakeup(t, ch)
 }
 
+func TestNotifyDispatcherReconcileSendsWakeupWhenHigherXIDHasLowerPosition(t *testing.T) {
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 1)}}
+	dispatcher := NewNotifyDispatcher("", "worker_events", newMockDB(), querier, store.NoOpLogger{})
+	dispatcher.lastHead = cur(9, 99)
+
+	ch := dispatcher.WakeupChan()
+
+	if err := dispatcher.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error = %v", err)
+	}
+
+	waitForWakeup(t, ch)
+}
+
 func TestNotifyDispatcherRejectsConcurrentStart(t *testing.T) {
-	querier := &mockPositionQuerier{positions: []int64{3, 3, 3}}
+	querier := &mockHeadQuerier{heads: []store.Cursor{cur(10, 3)}}
 	dispatcher := NewNotifyDispatcher("", "worker_events", newMockDB(), querier, store.NoOpLogger{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,7 +76,7 @@ func TestNotifyDispatcherRejectsConcurrentStart(t *testing.T) {
 }
 
 func TestNotifyDispatcherStartRejectsNilDB(t *testing.T) {
-	dispatcher := NewNotifyDispatcher("", "worker_events", nil, &mockPositionQuerier{positions: []int64{1}}, store.NoOpLogger{})
+	dispatcher := NewNotifyDispatcher("", "worker_events", nil, &mockHeadQuerier{heads: []store.Cursor{cur(1, 1)}}, store.NoOpLogger{})
 
 	if err := dispatcher.Start(context.Background()); !errors.Is(err, ErrNilDB) {
 		t.Fatalf("Start() error = %v, want %v", err, ErrNilDB)
@@ -70,7 +84,7 @@ func TestNotifyDispatcherStartRejectsNilDB(t *testing.T) {
 }
 
 func TestNotifyDispatcherStartRejectsEmptyChannel(t *testing.T) {
-	dispatcher := NewNotifyDispatcher("", "", newMockDB(), &mockPositionQuerier{positions: []int64{1}}, store.NoOpLogger{})
+	dispatcher := NewNotifyDispatcher("", "", newMockDB(), &mockHeadQuerier{heads: []store.Cursor{cur(1, 1)}}, store.NoOpLogger{})
 
 	if err := dispatcher.Start(context.Background()); !errors.Is(err, ErrEmptyChannel) {
 		t.Fatalf("Start() error = %v, want %v", err, ErrEmptyChannel)
@@ -82,7 +96,7 @@ func TestNotifyDispatcherStartReturnsInitialQueryError(t *testing.T) {
 		"",
 		"worker_events",
 		newMockDB(),
-		&mockPositionQuerier{positions: []int64{0}, errors: []error{errors.New("latest position failed")}},
+		&mockHeadQuerier{heads: []store.Cursor{{}}, errors: []error{errors.New("latest head failed")}},
 		store.NoOpLogger{},
 	)
 
@@ -90,27 +104,29 @@ func TestNotifyDispatcherStartReturnsInitialQueryError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Start() error = nil, want initialization error")
 	}
-	if !strings.Contains(err.Error(), "initialize notify dispatcher checkpoint: latest position failed") {
+	if !strings.Contains(err.Error(), "initialize notify dispatcher checkpoint: latest head failed") {
 		t.Fatalf("Start() error = %v, want wrapped initialization error", err)
 	}
 }
 
-func TestNotifyDispatcherReconcileDoesNotWakeWhenPositionUnchanged(t *testing.T) {
-	dispatcher := NewNotifyDispatcher("", "worker_events", newMockDB(), &mockPositionQuerier{positions: []int64{5}}, store.NoOpLogger{})
-	dispatcher.lastPos = 5
+func TestNotifyDispatcherReconcileDoesNotWakeWhenCursorUnchangedOrRegressing(t *testing.T) {
+	for _, head := range []store.Cursor{cur(10, 5), cur(9, 99), cur(10, 4)} {
+		dispatcher := NewNotifyDispatcher("", "worker_events", newMockDB(), &mockHeadQuerier{heads: []store.Cursor{head}}, store.NoOpLogger{})
+		dispatcher.lastHead = cur(10, 5)
 
-	ch := dispatcher.WakeupChan()
-	if err := dispatcher.reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile() error = %v", err)
-	}
+		ch := dispatcher.WakeupChan()
+		if err := dispatcher.reconcile(context.Background()); err != nil {
+			t.Fatalf("reconcile() error = %v", err)
+		}
 
-	select {
-	case <-ch:
-		t.Fatal("received unexpected wakeup signal")
-	default:
-	}
+		select {
+		case <-ch:
+			t.Fatalf("received unexpected wakeup signal for head %+v", head)
+		default:
+		}
 
-	if dispatcher.WakeupChan() != ch {
-		t.Fatal("wakeup channel changed without a position advance")
+		if dispatcher.WakeupChan() != ch {
+			t.Fatalf("wakeup channel changed without a cursor advance for head %+v", head)
+		}
 	}
 }

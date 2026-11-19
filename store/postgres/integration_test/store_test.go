@@ -221,7 +221,7 @@ func TestReadEvents(t *testing.T) {
 	tx2, _ := db.BeginTx(ctx, nil)
 	defer tx2.Rollback(ctx)
 
-	readEvents, err := pgStore.ReadEvents(ctx, tx2, 0, 10)
+	readEvents, err := pgStore.ReadEvents(ctx, tx2, store.Cursor{}, 10)
 	if err != nil {
 		t.Fatalf("Failed to read events: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestReadEvents(t *testing.T) {
 	}
 }
 
-func TestReadEvents_RawCheckpointCanSkipEarlierLaterCommittedPosition(t *testing.T) {
+func TestReadEvents_MVCCVisibilityHorizonPreventsOutOfOrderSkip(t *testing.T) {
 	db := getTestDB(t)
 	defer db.Close()
 
@@ -302,19 +302,21 @@ func TestReadEvents_RawCheckpointCanSkipEarlierLaterCommittedPosition(t *testing
 		_ = readTx1.Rollback(ctx)
 	}()
 
-	visibleBeforeFirstCommit, err := pgStore.ReadEvents(ctx, readTx1, 0, 10)
+	visibleBeforeFirstCommit, err := pgStore.ReadEvents(ctx, readTx1, store.Cursor{}, 10)
 	if err != nil {
 		t.Fatalf("Failed to read events before first commit: %v", err)
 	}
-
-	if len(visibleBeforeFirstCommit) != 1 {
-		t.Fatalf("Expected only the later committed event to be visible, got %d events", len(visibleBeforeFirstCommit))
-	}
-	if visibleBeforeFirstCommit[0].GlobalPosition != posB {
-		t.Fatalf("Expected visible event to have position %d, got %d", posB, visibleBeforeFirstCommit[0].GlobalPosition)
+	if len(visibleBeforeFirstCommit) != 0 {
+		t.Fatalf("Expected 0 visible events while older txA holds xmin, got %d", len(visibleBeforeFirstCommit))
 	}
 
-	checkpoint := visibleBeforeFirstCommit[0].GlobalPosition
+	headBeforeCommit, err := pgStore.GetHead(ctx, readTx1)
+	if err != nil {
+		t.Fatalf("GetHead before first commit failed: %v", err)
+	}
+	if !headBeforeCommit.IsZero() {
+		t.Fatalf("Expected zero head cursor while older txA holds xmin, got %+v", headBeforeCommit)
+	}
 
 	if err := txA.Commit(ctx); err != nil {
 		t.Fatalf("Failed to commit first transaction: %v", err)
@@ -328,24 +330,7 @@ func TestReadEvents_RawCheckpointCanSkipEarlierLaterCommittedPosition(t *testing
 		_ = readTx2.Rollback(ctx)
 	}()
 
-	eventsAfterCheckpoint, err := pgStore.ReadEvents(ctx, readTx2, checkpoint, 10)
-	if err != nil {
-		t.Fatalf("Failed to read events after checkpoint: %v", err)
-	}
-
-	if len(eventsAfterCheckpoint) != 0 {
-		t.Fatalf("Expected no events after checkpoint %d, got %d", checkpoint, len(eventsAfterCheckpoint))
-	}
-
-	readTx3, err := db.BeginTx(ctx, &txOptions{ReadOnly: true})
-	if err != nil {
-		t.Fatalf("Failed to begin verification read transaction: %v", err)
-	}
-	defer func() {
-		_ = readTx3.Rollback(ctx)
-	}()
-
-	allEvents, err := pgStore.ReadEvents(ctx, readTx3, 0, 10)
+	allEvents, err := pgStore.ReadEvents(ctx, readTx2, store.Cursor{}, 10)
 	if err != nil {
 		t.Fatalf("Failed to read all events after both commits: %v", err)
 	}
@@ -359,7 +344,7 @@ func TestReadEvents_RawCheckpointCanSkipEarlierLaterCommittedPosition(t *testing
 	}
 }
 
-func TestReadEvents_RawPositionsCanContainPermanentGapAfterRollback(t *testing.T) {
+func TestReadEvents_RollbackUnblocksLaterCommittedEventsImmediately(t *testing.T) {
 	db := getTestDB(t)
 	defer db.Close()
 
@@ -429,7 +414,7 @@ func TestReadEvents_RawPositionsCanContainPermanentGapAfterRollback(t *testing.T
 		_ = readTx.Rollback(ctx)
 	}()
 
-	visibleEvents, err := pgStore.ReadEvents(ctx, readTx, 0, 10)
+	visibleEvents, err := pgStore.ReadEvents(ctx, readTx, store.Cursor{}, 10)
 	if err != nil {
 		t.Fatalf("Failed to read visible events: %v", err)
 	}
@@ -449,12 +434,12 @@ func TestReadEvents_RawPositionsCanContainPermanentGapAfterRollback(t *testing.T
 		t.Fatalf("Expected rolled back position %d to be absent, count=%d", rolledBackPos, count)
 	}
 
-	latestPosition, err := pgStore.GetLatestGlobalPosition(ctx, readTx)
+	headCursor, err := pgStore.GetHead(ctx, readTx)
 	if err != nil {
-		t.Fatalf("Failed to read latest global position: %v", err)
+		t.Fatalf("Failed to read settled head cursor: %v", err)
 	}
-	if latestPosition != committedPos {
-		t.Fatalf("Expected latest global position to be %d, got %d", committedPos, latestPosition)
+	if headCursor.GlobalPosition != committedPos || headCursor.TransactionID == 0 {
+		t.Fatalf("Expected head cursor GlobalPosition=%d with non-zero TransactionID, got %+v", committedPos, headCursor)
 	}
 }
 
@@ -492,7 +477,7 @@ func TestReadEvents_Pagination(t *testing.T) {
 	tx1, _ := db.BeginTx(ctx, nil)
 	defer tx1.Rollback(ctx)
 
-	batch1, err := pgStore.ReadEvents(ctx, tx1, 0, 2)
+	batch1, err := pgStore.ReadEvents(ctx, tx1, store.Cursor{}, 2)
 	if err != nil {
 		t.Fatalf("Failed to read first batch: %v", err)
 	}
@@ -505,7 +490,11 @@ func TestReadEvents_Pagination(t *testing.T) {
 	tx2, _ := db.BeginTx(ctx, nil)
 	defer tx2.Rollback(ctx)
 
-	batch2, err := pgStore.ReadEvents(ctx, tx2, batch1[len(batch1)-1].GlobalPosition, 2)
+	last := batch1[len(batch1)-1]
+	batch2, err := pgStore.ReadEvents(ctx, tx2, store.Cursor{
+		TransactionID:  last.TransactionID,
+		GlobalPosition: last.GlobalPosition,
+	}, 2)
 	if err != nil {
 		t.Fatalf("Failed to read second batch: %v", err)
 	}

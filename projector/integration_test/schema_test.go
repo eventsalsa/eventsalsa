@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
 
 	projectorpkg "eventsalsa.dev/projector"
@@ -27,7 +28,6 @@ func generateProjectorSQLForSchema(t testing.TB, outputDir, schema string) []byt
 		ProjectorInstancesTable:    schema + ".projector_instances",
 		ProjectionAssignmentsTable: schema + ".projection_assignments",
 		ProjectionCheckpointsTable: schema + ".projection_checkpoints",
-		ProjectionGapSkipsTable:    schema + ".projection_gap_skips",
 		ProjectorLeaderLeasesTable: schema + ".projector_leader_leases",
 	}
 	if err := projectormigrations.GeneratePostgres(config); err != nil {
@@ -42,41 +42,55 @@ func generateProjectorSQLForSchema(t testing.TB, outputDir, schema string) []byt
 	return sqlBytes
 }
 
-func TestGap_SchemaQualifiedProjectorTables(t *testing.T) {
+func TestSchemaQualifiedProjectorTables(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
 	defer cleanupTables(t, controlDB)
 
 	ctx := context.Background()
-	if _, err := controlDB.Exec(ctx, `DROP SCHEMA IF EXISTS `+infraSchema+` CASCADE`); err != nil {
+	if _, err := controlDB.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS %s CASCADE`, infraSchema)); err != nil {
 		t.Fatalf("drop %s schema: %v", infraSchema, err)
 	}
+	t.Cleanup(func() {
+		_, _ = controlDB.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS %s CASCADE`, infraSchema))
+	})
 
-	sqlBytes := generateProjectorSQLForSchema(t, t.TempDir(), infraSchema)
-	if _, err := controlDB.Exec(ctx, string(sqlBytes)); err != nil {
-		t.Fatalf("execute %s projector migration: %v", infraSchema, err)
+	ddl := generateProjectorSQLForSchema(t, t.TempDir(), infraSchema)
+	if _, err := controlDB.Exec(ctx, string(ddl)); err != nil {
+		t.Fatalf("execute schema-qualified projector migration: %v", err)
+	}
+
+	var gapSkipTableCount int
+	if err := controlDB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.tables
+		WHERE table_schema = $1 AND table_name = 'projection_gap_skips'
+	`, infraSchema).Scan(&gapSkipTableCount); err != nil {
+		t.Fatalf("check projection_gap_skips absence: %v", err)
+	}
+	if gapSkipTableCount != 0 {
+		t.Fatalf("found %d projection_gap_skips tables in schema %s, want 0", gapSkipTableCount, infraSchema)
 	}
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := newTestProjection("infra-projection", "projector-1", nil)
+	projection := newTestProjection("schema-proj", "projector-1", nil)
 
 	options := append(defaultProjectorOptions(),
+		projectorpkg.WithLeaderStrategy(projectorpkg.LeaderStrategyLease),
 		projectorpkg.WithProjectorInstancesTable(infraSchema+".projector_instances"),
 		projectorpkg.WithProjectionAssignmentsTable(infraSchema+".projection_assignments"),
 		projectorpkg.WithProjectionCheckpointsTable(infraSchema+".projection_checkpoints"),
-		projectorpkg.WithProjectionGapSkipsTable(infraSchema+".projection_gap_skips"),
 		projectorpkg.WithProjectorLeaderLeasesTable(infraSchema+".projector_leader_leases"),
 	)
-
 	harness := startTestProjectorWithTables(t, "projector-1",
 		[]projectorpkg.Projection{projection},
 		infraSchema+".projector_instances",
 		options...,
 	)
 
-	appended := appendTestEvents(t, controlDB, eventStore, 2, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	appended := appendTestEvents(t, controlDB, eventStore, 3, "Order")
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		checkpoint, err := projectorpostgres.GetCheckpoint(ctx, controlDB, infraSchema+".projection_checkpoints", projection.Name())
@@ -84,17 +98,13 @@ func TestGap_SchemaQualifiedProjectorTables(t *testing.T) {
 			return err
 		}
 		if checkpoint != latest {
-			return fmt.Errorf("%s checkpoint=%d want %d", infraSchema, checkpoint, latest)
+			return fmt.Errorf("%s checkpoint=%+v want %+v", infraSchema, checkpoint, latest)
 		}
 		return nil
 	})
 
-	var defaultRows int
-	if err := controlDB.QueryRow(ctx, `SELECT COUNT(*) FROM projector_instances`).Scan(&defaultRows); err != nil {
-		t.Fatalf("count default projector_instances: %v", err)
-	}
-	if defaultRows != 0 {
-		t.Fatalf("default projector_instances has %d rows, want 0 for a schema-qualified daemon", defaultRows)
+	if checkpoint, err := projectorpostgres.GetCheckpoint(ctx, controlDB, projectorpostgres.DefaultProjectionCheckpointsTable, projection.Name()); err != nil || checkpoint != (store.Cursor{}) {
+		t.Fatalf("default public checkpoint=%+v (err=%v), want zero cursor", checkpoint, err)
 	}
 
 	harness.stop(t)

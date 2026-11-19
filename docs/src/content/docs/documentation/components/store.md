@@ -53,7 +53,9 @@ Two values deserve special attention because they are easy to conflate:
 If an order stream is currently at stream version `7` and a command appends two new events, those events will be stored at stream versions `8` and `9`. At the same time, they also get global positions in the shared event log.
 
 :::caution
-`global_position` is useful for projections and event readers, but it is **not** a safe naive checkpoint frontier under concurrent writers. PostgreSQL sequences guarantee uniqueness, not commit order. A lower position can become visible after a higher one has already been returned.
+Direct SQL consumers and custom readers must **not** tail or checkpoint `events` by raw `global_position` alone. PostgreSQL sequences guarantee uniqueness, not transaction commit order: a concurrent writer holding a lower `global_position` can commit after a higher `global_position` is already visible, and rolled-back transactions leave permanent sequence holes.
+
+Instead, consume the global log using the composite **`(transaction_id, global_position)`** cursor (`store.Cursor`) bounded by PostgreSQL's MVCC visibility horizon (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`)—available directly via `EventReader.ReadEvents`, `HeadReader.GetHead`, and [`eventsalsa/projector`](../projector/).
 :::
 
 ### Optimistic concurrency
@@ -744,7 +746,7 @@ If you change the generated table names, change the store configuration too.
 ### Why partition on `global_position`?
 
 1. **Append-Only Monotonic Order**: All appends write sequentially into the newest active partition. Older partition indexes become read-only and stay hot in the OS page cache without ongoing index churn.
-2. **Sequential Log and Projection Pagination**: Readers scanning `ReadEvents(ctx, tx, fromPosition, limit)` process contiguous ranges localized within one or two partitions at a time.
+2. **Sequential Log and Projection Pagination**: Readers scanning `ReadEvents(ctx, tx, afterCursor, limit)` advance monotonically across commits using composite `(transaction_id, global_position)` predicates localized to recent partitions.
 3. **Cross-Partition Optimistic Concurrency**: In PostgreSQL, parent tables partitioned by `RANGE (global_position)` cannot enforce cross-partition unique constraints on columns that do not include the partition key (i.e. `UNIQUE (stream_type, stream_id, stream_version)` cannot span partitions). `eventsalsa/store` resolves this by using the unpartitioned `stream_heads` table to atomically reserve version ranges before writing to `events`.
 
 ### Native Range Partitioning

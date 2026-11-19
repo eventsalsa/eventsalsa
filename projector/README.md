@@ -15,13 +15,13 @@ It builds on [`eventsalsa.dev/store`](https://github.com/eventsalsa/eventsalsa/t
 - **Batch handlers** for destinations with bulk APIs (multi-row upserts, search-engine bulk import)
 - **Pluggable leader election**: choose between PostgreSQL session-level advisory locks (`pg_try_advisory_lock`) or a PgBouncer-safe table lease heartbeat strategy
 - **Horizontal scaling** through round-robin projection assignment across active projector instances
-- **Gap-aware checkpointing**: probe the frontier, handle only safe rows, and audit stale-gap advances
+- **MVCC visibility-horizon checkpointing**: consume only transactions committed below `pg_snapshot_xmin(pg_current_snapshot())`, ordered and checkpointed by composite `(TransactionID, GlobalPosition)` (`store.Cursor`)
 - **Adaptive polling** with exponential backoff and low-latency wakeups
 - **Wakeup dispatchers**:
-  - polling via periodic latest-position checks
+  - polling via periodic committed-head checks (`store.HeadReader`)
   - PostgreSQL `LISTEN`/`NOTIFY` with reconciliation polling fallback
 - **Stream and event filtering** through registration options (`OnStreamTypes`, `OnEventTypes`) or the deprecated decorators (`FilterStreamTypes`, `FilterEventTypes`)
-- **Pluggable telemetry and metrics observer** for monitoring projection lag, batch duration, throughput, gap skips, and rebalances with zero extra database queries
+- **Pluggable telemetry and metrics observer** for monitoring projection lag, batch duration, throughput, degraded retries, poison skips, and rebalances with zero extra database queries
 - **Migration generation** for projector infrastructure tables
 - **Customizable configuration** via the functional options pattern
 
@@ -30,12 +30,12 @@ It builds on [`eventsalsa.dev/store`](https://github.com/eventsalsa/eventsalsa/t
 At runtime, each projector daemon instance:
 
 1. Performs a best-effort cleanup of very stale instance registrations, then registers itself in PostgreSQL and updates its heartbeat periodically.
-2. Starts a dispatcher that detects newly appended events.
+2. Starts a dispatcher that detects newly committed events at PostgreSQL's MVCC visibility horizon.
 3. Participates in leader election (using advisory locks or database-backed leases).
 4. Lets the elected leader rebalance projection assignments across live projector instances.
 5. Runs projection goroutines only for the projections assigned to that instance.
-6. Probes the global frontier outside the batch transaction, then processes only the current safe frontier inside the batch transaction.
-7. For detached projections, applies the safe frontier with no transaction held and persists the checkpoint afterwards in a short transaction.
+6. Reads and handles committed events below `pg_snapshot_xmin(pg_current_snapshot())` in ascending `(transaction_id, global_position)` order and persists the composite checkpoint atomically inside the batch transaction.
+7. For detached projections, reads the committed batch in a short read-only transaction, executes the external handler with no transaction held, and persists the composite checkpoint afterwards in a short transaction.
 
 This design keeps coordination inside PostgreSQL, making the module straightforward to operate in environments that already depend on Postgres.
 
@@ -46,9 +46,9 @@ The module intentionally favors simple, database-native coordination:
 - **Single leader, many instances**: only the elected leader recalculates assignments; every projector instance still heartbeats and processes its own assigned projections.
 - **Advisory-lock or lease-based leadership**: choose between zero-overhead session advisory locks or PgBouncer transaction pooling-safe database leases.
 - **Conservative instance cleanup**: startup may prune `projector_instances` rows only when they are much older than the live-instance timeout, so housekeeping stays less aggressive than rebalance liveness checks.
-- **Scoped handling after frontier probe**: projections registered with stream or event filters receive only matching events, but checkpoint correctness comes from an unscoped frontier probe rather than from the last matching filtered row.
+- **Unscoped visibility-horizon checkpoints**: projections registered with stream or event filters receive only matching events, while their composite checkpoint advances to the unscoped batch cursor so filtered windows never stall.
 - **Broadcast wakeups via close-and-replace channels**: dispatchers notify all waiting projection loops by closing the current wakeup channel and replacing it with a new one.
-- **Adaptive polling**: projection loops start at a base poll interval, back off exponentially when idle, stay hot while blocked on known gaps, and reset immediately when new events are found or a wakeup arrives.
+- **Adaptive polling**: projection loops start at a base poll interval, back off exponentially when idle, and reset immediately when new events are found or a wakeup arrives.
 
 ## Package layout
 
@@ -59,9 +59,8 @@ The module intentionally favors simple, database-native coordination:
 ├── projection.go            # Projection interfaces and filter decorators
 ├── registry.go              # Projection registry builder and registration filters
 ├── applier.go               # Handler-shape adapters and the internal filter decorator
-├── frontier.go              # Safe frontier and safe harbor calculation
 ├── dispatcher/              # PollDispatcher and NotifyDispatcher
-├── postgres/                # PostgreSQL DAL for registration, leadership, assignment, checkpoints, gap-skip audit
+├── postgres/                # PostgreSQL DAL for registration, leadership, assignment, and composite checkpoints
 ├── migrations/              # SQL migration generator for projector metadata tables
 └── integration_test/        # Integration tests against real PostgreSQL
 ```
@@ -194,7 +193,7 @@ daemon := projector.New(db, eventStore, registry,
 | `WithHeartbeatTimeout(d time.Duration)` | Heartbeat staleness timeout | `30s` |
 | `WithRebalanceInterval(d time.Duration)` | Leader rebalance check interval | `5s` |
 | `WithBatchPause(d time.Duration)` | Pause between consecutive full batches during catch-up | `200ms` |
-| `WithBatchTimeout(d time.Duration)` | Maximum duration for a single batch processing cycle: the frontier probe and the detached external apply | `30s` |
+| `WithBatchTimeout(d time.Duration)` | Maximum duration for a single batch processing cycle: the MVCC probe and the detached external apply | `30s` |
 | `WithDetachedApplyTimeout(d time.Duration)` | Maximum duration of the external apply for a detached projection; the effective budget is `min(BatchTimeout, DetachedApplyTimeout)` | `30s` |
 | `WithCheckpointTimeout(d time.Duration)` | Maximum duration of the post-apply detached checkpoint phase, independent of `BatchTimeout` | `5s` |
 | `WithShutdownTimeout(d time.Duration)` | Maximum duration to wait for graceful daemon shutdown | `5s` |
@@ -203,10 +202,7 @@ daemon := projector.New(db, eventStore, registry,
 | `WithProjectorInstancesTable(name string)` | Override instance registration table name | `projector_instances` |
 | `WithProjectionAssignmentsTable(name string)` | Override assignment table name | `projection_assignments` |
 | `WithProjectionCheckpointsTable(name string)` | Override checkpoint table name | `projection_checkpoints` |
-| `WithProjectionGapSkipsTable(name string)` | Override stale-gap audit table name | `projection_gap_skips` |
 | `WithProjectorLeaderLeasesTable(name string)` | Override leader election lease table name | `projector_leader_leases` |
-| `WithStaleGapThreshold(d time.Duration)` | How long the daemon waits on the same missing position before safe-harbor advancement | `30s` |
-| `WithStaleGapHarborLag(n int)` | How far behind the visible head the daemon stays when advancing past a stale gap | `8` |
 | `WithDispatcherStrategy(strategy)` | Wakeup strategy: `projector.DispatcherStrategyPoll` or `projector.DispatcherStrategyNotify` | `projector.DispatcherStrategyPoll` |
 | `WithNotifyConnectionString(connStr string)` | PostgreSQL connection string used by the notify dispatcher | empty |
 | `WithNotifyChannel(channel string)` | PostgreSQL notification channel for the notify dispatcher | empty (`""`) |
@@ -227,7 +223,7 @@ daemon := projector.New(db, eventStore, registry,
 
 #### Poll dispatcher
 
-`projector.DispatcherStrategyPoll` periodically checks the latest global event position and wakes projections when it advances.
+`projector.DispatcherStrategyPoll` periodically checks the committed head cursor (`store.HeadReader.GetHead`) and wakes projections when it advances.
 
 Use it when:
 
@@ -319,7 +315,7 @@ daemon := projector.New(db, eventStore, registry)
 
 ### Registration filters
 
-`OnStreamTypes` and `OnEventTypes` limit a projection to matching events. Non-matching events are skipped without error and the checkpoint still advances to the **unscoped** safe frontier, so a filtered projection that matches nothing in a window does not stall.
+`OnStreamTypes` and `OnEventTypes` limit a projection to matching events. Non-matching events are skipped without error and the checkpoint still advances to the **unscoped** batch cursor, so a filtered projection that matches nothing in a window does not stall.
 
 ```go
 _ = registry.AddProjection(myProjection, projector.OnStreamTypes("Account", "Order"))
@@ -335,7 +331,7 @@ _ = registry.AddProjection(myProjection, projector.OnEventTypes("AccountCreated"
 - Transactional handlers receive a transaction that also owns checkpoint persistence and must **not** call `Commit` or `Rollback` on it.
 - If a handler returns an error, the batch fails and the checkpoint is not advanced.
 - Filtered events are safely skipped and checkpoints advance normally.
-- `BatchProjection` and `DetachedBatchProjection` receive only events at or below the current safe frontier.
+- `BatchProjection` and `DetachedBatchProjection` receive all visible committed events in the batch window ordered by `(transaction_id, global_position)`.
 
 ### Detached projections and idempotency
 
@@ -345,15 +341,15 @@ Detached projections are applied outside the daemon transaction and checkpointed
 - when the checkpoint transaction is retried on a serialization failure,
 - when a projection is reassigned during an apply.
 
-Detached handlers must therefore be idempotent. Use a deterministic document id (for example the entity's stream id for state projections) and a monotonic version guard built from `StreamVersion` or `GlobalPosition` so a replayed older event cannot overwrite newer state. Destination error `k` of `N` fails the whole batch; the checkpoint is never advanced past work that was not applied.
+Detached handlers must therefore be idempotent. Use a deterministic document id (for example the entity's stream id for state projections) and a monotonic version guard built from `StreamVersion` (for per-stream state) or `(TransactionID, GlobalPosition)` (for multi-stream projections) so a replayed older event cannot overwrite newer state. Destination error `k` of `N` fails the whole batch; the checkpoint is never advanced past work that was not applied.
 
-The safe-harbor stale-gap behavior applies to detached projections too. Before applying, the daemon revalidates the plan in a short read-only transaction and freezes the applied set and checkpoint target. If the gap closes while the batch is being applied, the checkpoint write is discarded and the batch is re-probed rather than skipping the newly available event.
+If another worker already advanced `(last_transaction_id, last_position)` while the external apply was in flight, the checkpoint upsert refuses to regress and skips redundant work. Checkpoint persistence retries up to 3 times on transient `SQLSTATE 40001` serialization failures without re-applying external side effects.
 
 ### Detached phase budgets
 
 A detached batch runs three phases with separate budgets:
 
-- The frontier probe and stale-gap revalidation share `BatchTimeout`.
+- The initial MVCC batch probe shares `BatchTimeout` with the apply phase.
 - The external apply is bounded by `min(BatchTimeout, DetachedApplyTimeout)`. Lower `DetachedApplyTimeout` below `BatchTimeout` to reserve room for the rest of the batch.
 - The checkpoint transaction that follows the apply is bounded by `CheckpointTimeout`, measured from the start of the checkpoint phase and rooted in the daemon's processing context. It never inherits the batch deadline, so a slow destination cannot leave the checkpoint write with a canceled context and force the whole window to be applied again.
 
@@ -432,39 +428,36 @@ These wrappers only support the classic `Projection` shape. New code should use 
 
 ### Checkpoint semantics
 
-Projection checkpoints track the **highest safe global position** the daemon has advanced to, not the last matching filtered event handled by that projection.
+Projection checkpoints track the **composite cursor `(last_transaction_id, last_position)`** (`store.Cursor`) processed within PostgreSQL's MVCC visibility horizon, not the last matching filtered event handled by that projection.
 
 That means:
 
 - filtered projections can handle zero events in a batch while the checkpoint still advances
 - later matching events never define the checkpoint target by themselves
-- stale-gap advances are durably recorded in `projection_gap_skips`
+- concurrent writers with earlier XIDs commit lower `(transaction_id, global_position)` entries before later XIDs can advance visibility
 
 ## Processing model
 
 For each assigned projection, the daemon repeatedly:
 
-1. loads the current checkpoint
-2. performs an **unscoped frontier probe** outside the batch transaction
-3. computes the current safe frontier from that probe
-4. waits on unresolved gaps until they either resolve or become stale
-5. when a gap is stale, advances conservatively to a safe harbor behind the current visible head, or to the earliest reachable visible frontier when the probe window is smaller than the configured lag
-6. opens the batch transaction and calls `Handle` only for rows at or below the target frontier
-7. saves the checkpoint target, records any stale-gap skip, and commits the transaction
-8. for detached projections, applies the frozen rows with no transaction held and then writes the checkpoint, and any stale-gap audit record, in a short transaction
+1. loads the current composite checkpoint cursor `(last_transaction_id, last_position)`
+2. probes committed events satisfying `transaction_id < pg_snapshot_xmin(pg_current_snapshot()) AND (transaction_id, global_position) > ($1::xid8, $2::bigint)` ordered by `(transaction_id, global_position)`
+3. skips the batch if the visibility horizon holds no new events
+4. opens the batch transaction, filters events in memory if configured, calls `Handle`, saves the new composite checkpoint atomically inside `tx`, and commits
+5. for detached projections, executes `Handle` with no transaction held and then persists the monotonic composite checkpoint in a short transaction (retrying up to 3 times on `SQLSTATE 40001` without re-applying side effects)
 
-That means read-model updates performed through `tx`, checkpoint moves, and stale-gap audit records stay atomic with one another for transactional projections. Detached projections give that up in exchange for never holding a pooled connection or the assignment and checkpoint row locks during network I/O; they are at-least-once and require idempotent handlers.
+That means read-model updates performed through `tx` and checkpoint moves stay atomic with one another for transactional projections. Detached projections give that up in exchange for never holding a pooled connection or the assignment and checkpoint row locks during network I/O; they are at-least-once and require idempotent handlers.
 
-### Stale-gap behavior
+### MVCC visibility horizon & out-of-order commits
 
-`global_position` values are sequence-backed, so a lower position can appear later than a higher committed position. The daemon therefore:
+`global_position` values come from a PostgreSQL sequence, so concurrent writers can commit out of sequence order or roll back transactions/savepoints, leaving unused sequence numbers in `global_position`. Instead of relying on `global_position` alone:
 
-- refuses to checkpoint past a visible gap immediately
-- keeps polling the same gap for up to `StaleGapThreshold`
-- if the gap stays unresolved, advances conservatively to a safe harbor behind the current visible head, falling back to the earliest reachable visible frontier when the probe window is smaller than the configured lag
-- records that decision in `projection_gap_skips` so operators can inspect it later
+- Every event records PostgreSQL's transaction ID (`transaction_id xid8`).
+- `EventReader.ReadEvents` and `HeadReader.GetHead` filter strictly with `transaction_id < pg_snapshot_xmin(pg_current_snapshot())`. Any concurrent transaction with an older active XID holds `xmin` behind it so newer transactions never bypass an in-flight older commit.
+- Once an older transaction rolls back (or releases a savepoint), `pg_snapshot_xmin` immediately advances past its XID without stalling projections or skipping later events.
+- Ordering by `(transaction_id, global_position)` guarantees late commits with lower `global_position` values are delivered deterministically in commit visibility order.
 
-If a stale-gap decision later proves too aggressive for a projection, the recovery path is to rewind or rebuild from a safe checkpoint.
+Keep event-store write transactions short in production because any long-running database transaction holding an XID will pin `pg_snapshot_xmin` across the cluster.
 
 ## Migration generation
 
@@ -484,7 +477,6 @@ go run eventsalsa.dev/projector/cmd/migrate-gen \
   -projector-instances-table infra.projector_instances \
   -projection-assignments-table infra.projection_assignments \
   -projection-checkpoints-table infra.projection_checkpoints \
-  -projection-gap-skips-table infra.projection_gap_skips \
   -projector-leader-leases-table infra.projector_leader_leases
 ```
 
@@ -506,7 +498,6 @@ func main() {
     config.ProjectorInstancesTable = "infra.projector_instances"
     config.ProjectionAssignmentsTable = "infra.projection_assignments"
     config.ProjectionCheckpointsTable = "infra.projection_checkpoints"
-    config.ProjectionGapSkipsTable = "infra.projection_gap_skips"
     config.ProjectorLeaderLeasesTable = "infra.projector_leader_leases"
 
     if err := migrations.GeneratePostgres(&config); err != nil {
@@ -520,7 +511,6 @@ The generated migration creates:
 - `projector_instances`
 - `projection_assignments`
 - `projection_checkpoints`
-- `projection_gap_skips`
 - `projector_leader_leases`
 
 It also creates schemas automatically when a configured table name includes a schema prefix.
@@ -626,8 +616,6 @@ The projector daemon exposes internal runtime events and metrics via a pluggable
 type Observer interface {
     OnBatchProcessed(ctx context.Context, stats BatchStats)
     OnHeartbeat(ctx context.Context, stats DaemonStats)
-    OnGapDetected(ctx context.Context, stats GapStats)
-    OnGapSkipped(ctx context.Context, stats GapStats)
     OnProjectionDegraded(ctx context.Context, stats DegradedStats)
     OnPoisonBatchSkipped(ctx context.Context, stats PoisonBatchStats)
     OnRebalance(ctx context.Context, assignments map[string]uuid.UUID)
@@ -636,11 +624,10 @@ type Observer interface {
 
 ### Telemetry data structures
 
-- **`BatchStats`**: contains batch execution latency (`Duration`), global checkpoint positions (`StartPosition`, `LastPosition`, `HeadPosition`), calculated event lag (`Lag = max(0, HeadPosition - LastPosition)`), throughput counts (`EventsRead` for the window and `EventsHandled` for events applied after registration filtering), a safe-harbor stale skip indicator (`StaleSkipped`), a `Detached` flag, and error status (`Error`).
+- **`BatchStats`**: contains batch execution latency (`Duration`), composite checkpoint cursors (`StartTransactionID`/`StartPosition`, `LastTransactionID`/`LastPosition`, `HeadTransactionID`/`HeadPosition`), calculated event lag (`Lag = max(0, HeadPosition - LastPosition)`), throughput counts (`EventsRead` for the window and `EventsHandled` for events applied after registration filtering), a `Detached` flag, and error status (`Error`).
 - **`DaemonStats`**: contains instance UUID (`InstanceID`) and leadership status (`IsLeader`).
-- **`GapStats`**: contains missing sequence coordinate (`GapPosition`), visible stream head (`HighestVisible`), and elapsed duration (`StaleFor`).
 - **`DegradedStats`**: contains the projection name, the time of the first failure in the current run (`FirstFailureAt`), the consecutive failure count, and the last error, reported for failures that do not stop the daemon.
-- **`PoisonBatchStats`**: contains the projection name, the checkpoint target the batch was skipped to, the event count, and the cause, reported after a poison handler records a batch.
+- **`PoisonBatchStats`**: contains the projection name, the checkpoint cursor target the batch was skipped to (`TargetTransactionID`, `TargetPosition`), the event count, and the cause, reported after a poison handler records a batch.
 
 ### Convenience utilities
 
