@@ -6,11 +6,11 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
 	site: 'https://eventsalsa.dev',
 	base: '/',
+	scopedStyleStrategy: 'where',
 	integrations: [
 		starlight({
 			title: 'eventsalsa',
 			description: 'Website and documentation for the eventsalsa event sourcing bundle for Go.',
-			tagline: 'A component-based stack for event sourcing in Go.',
 			lastUpdated: true,
 			disable404Route: true,
 			head: [
