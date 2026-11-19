@@ -1,3 +1,5 @@
+eventsalsa.dev/encryption v0.1.0 h1:mETnLHcshs8jfNSM6Y2QqeyDNIwF5HINFjyWsF7pIEs=
+eventsalsa.dev/encryption v0.1.0/go.mod h1:L/X1drcjq+eCvJOmLrX6d5/ji191fAdZhJ5uK9/93zE=
 github.com/aws/aws-sdk-go-v2 v1.36.4 h1:GySzjhVvx0ERP6eyfAbAuAXLtAda5TEy19E5q5W8I9E=
 github.com/aws/aws-sdk-go-v2 v1.36.4/go.mod h1:LLXuLpgzEbD766Z5ECcRmi8AzSwfZItDtmABVkRLGzg=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.35 h1:o1v1VFfPcDVlK3ll1L5xHsaQAFdNtZ5GXnNR7SwueC4=
