@@ -208,8 +208,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type-check Cloudflare middleware
-        run: ./node_modules/.bin/tsc --noEmit --skipLibCheck --strict --target es2022 --module esnext --lib es2022,dom functions/_middleware.ts
+      - name: Type-check Cloudflare Worker
+        run: ./node_modules/.bin/tsc --noEmit --skipLibCheck --strict --target es2022 --module esnext --lib es2022,dom worker/index.ts
 
       - name: Build site
         run: npm run build
