@@ -22,14 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       root: ${{ steps.filter.outputs.root }}
-      store: ${{ steps.filter.outputs.store }}
-      snapshot: ${{ steps.filter.outputs.snapshot }}
-      projector: ${{ steps.filter.outputs.projector }}
-      encryption: ${{ steps.filter.outputs.encryption }}
-      encryption_awskms: ${{ steps.filter.outputs.encryption_awskms }}
-      encryption_gcpkms: ${{ steps.filter.outputs.encryption_gcpkms }}
-      encryption_examples: ${{ steps.filter.outputs.encryption_examples }}
       docs: ${{ steps.filter.outputs.docs }}
+      modules: ${{ steps.matrix.outputs.modules }}
+      has_modules: ${{ steps.matrix.outputs.has_modules }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,46 +58,65 @@ jobs:
             docs:
               - 'docs/**'
 
+      - name: Compute module matrix
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ROOT_CHANGED: ${{ steps.filter.outputs.root }}
+          STORE_CHANGED: ${{ steps.filter.outputs.store }}
+          SNAPSHOT_CHANGED: ${{ steps.filter.outputs.snapshot }}
+          PROJECTOR_CHANGED: ${{ steps.filter.outputs.projector }}
+          ENCRYPTION_CHANGED: ${{ steps.filter.outputs.encryption }}
+          AWSKMS_CHANGED: ${{ steps.filter.outputs.encryption_awskms }}
+          GCPKMS_CHANGED: ${{ steps.filter.outputs.encryption_gcpkms }}
+          EXAMPLES_CHANGED: ${{ steps.filter.outputs.encryption_examples }}
+        run: |
+          all_modules='[
+            {"key":"store","dir":"store","integration":true,"published":true},
+            {"key":"snapshot","dir":"snapshot","integration":true,"published":true},
+            {"key":"projector","dir":"projector","integration":true,"published":true},
+            {"key":"encryption","dir":"encryption","integration":true,"published":true},
+            {"key":"encryption_awskms","dir":"encryption/kek/awskms","integration":false,"published":true},
+            {"key":"encryption_gcpkms","dir":"encryption/kek/gcpkms","integration":false,"published":true},
+            {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false}
+          ]'
+          if [ "$EVENT_NAME" = "push" ] || [ "$ROOT_CHANGED" = "true" ]; then
+            selected=$(printf '%s' "$all_modules" | jq -c '.')
+          else
+            selected=$(printf '%s' "$all_modules" | jq -c \
+              --arg store "$STORE_CHANGED" \
+              --arg snapshot "$SNAPSHOT_CHANGED" \
+              --arg projector "$PROJECTOR_CHANGED" \
+              --arg encryption "$ENCRYPTION_CHANGED" \
+              --arg encryption_awskms "$AWSKMS_CHANGED" \
+              --arg encryption_gcpkms "$GCPKMS_CHANGED" \
+              --arg encryption_examples "$EXAMPLES_CHANGED" '
+                [ .[] | select(
+                  (.key == "store" and $store == "true") or
+                  (.key == "snapshot" and $snapshot == "true") or
+                  (.key == "projector" and $projector == "true") or
+                  (.key == "encryption" and $encryption == "true") or
+                  (.key == "encryption_awskms" and $encryption_awskms == "true") or
+                  (.key == "encryption_gcpkms" and $encryption_gcpkms == "true") or
+                  (.key == "encryption_examples" and $encryption_examples == "true")
+                ) ]')
+          fi
+          has_modules="false"
+          if [ "$(printf '%s' "$selected" | jq 'length')" -gt 0 ]; then
+            has_modules="true"
+          fi
+          printf 'modules=%s\n' "$selected" >> "$GITHUB_OUTPUT"
+          printf 'has_modules=%s\n' "$has_modules" >> "$GITHUB_OUTPUT"
+
   go-module:
     name: Go (${{ matrix.module.dir }})
     needs: changes
-    if: >-
-      github.event_name == 'push' ||
-      needs.changes.outputs.root == 'true' ||
-      needs.changes.outputs[matrix.module.key] == 'true'
+    if: needs.changes.outputs.has_modules == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module:
-          - key: store
-            dir: store
-            integration: true
-            published: true
-          - key: snapshot
-            dir: snapshot
-            integration: true
-            published: true
-          - key: projector
-            dir: projector
-            integration: true
-            published: true
-          - key: encryption
-            dir: encryption
-            integration: true
-            published: true
-          - key: encryption_awskms
-            dir: encryption/kek/awskms
-            integration: false
-            published: true
-          - key: encryption_gcpkms
-            dir: encryption/kek/gcpkms
-            integration: false
-            published: true
-          - key: encryption_examples
-            dir: encryption/examples
-            integration: false
-            published: false
+        module: ${{ fromJson(needs.changes.outputs.modules) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
