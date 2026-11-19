@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -370,8 +371,8 @@ func IsUniqueViolation(err error) bool {
 }
 
 // ReadEvents implements store.EventReader.
-func (s *Store) ReadEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, limit int) ([]store.PersistedEvent, error) {
-	return s.readEvents(ctx, tx, fromPosition, limit)
+func (s *Store) ReadEvents(ctx context.Context, tx pgx.Tx, after store.Cursor, limit int) ([]store.PersistedEvent, error) {
+	return s.readEvents(ctx, tx, after, limit)
 }
 
 const eventSelectColumns = `global_position, transaction_id, stream_type, stream_id, stream_version,
@@ -400,12 +401,22 @@ func scanPersistedEvent(rows pgx.Rows) (store.PersistedEvent, error) {
 	return e, err
 }
 
-func (s *Store) readEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, limit int) ([]store.PersistedEvent, error) {
+func (s *Store) readEvents(ctx context.Context, tx pgx.Tx, after store.Cursor, limit int) ([]store.PersistedEvent, error) {
 	if s.config.Logger != nil {
-		s.config.Logger.Debug(ctx, "reading events", "from_position", fromPosition, "limit", limit)
+		s.config.Logger.Debug(ctx, "reading events",
+			"after_transaction_id", after.TransactionID,
+			"after_global_position", after.GlobalPosition,
+			"limit", limit)
 	}
 
-	query, args := buildReadEventsQuery(s.config.EventsTable, fromPosition, limit)
+	if limit <= 0 {
+		if s.config.Logger != nil {
+			s.config.Logger.Debug(ctx, "events read", "count", 0)
+		}
+		return nil, nil
+	}
+
+	query, args := buildReadEventsQuery(s.config.EventsTable, after, limit)
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events: %w", err)
@@ -434,42 +445,49 @@ func (s *Store) readEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, l
 
 func buildReadEventsQuery(
 	eventsTable string,
-	fromPosition int64,
+	after store.Cursor,
 	limit int,
 ) (query string, args []any) {
+	//nolint:gosec // G201: table name from trusted config, not user input
 	query = fmt.Sprintf(`
-		SELECT 
+		SELECT
 			%s
 		FROM %s
-		WHERE global_position > $1
+		WHERE transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+		  AND (transaction_id, global_position) > ($1::xid8, $2::bigint)
+		ORDER BY transaction_id ASC, global_position ASC
+		LIMIT $3
 	`, eventSelectColumns, eventsTable)
 
-	query += "\n\t\tORDER BY global_position ASC\n\t\tLIMIT $2\n\t"
-	args = []any{fromPosition, limit}
-
+	args = []any{strconv.FormatUint(after.TransactionID, 10), after.GlobalPosition, limit}
 	return query, args
 }
 
-// GetLatestGlobalPosition implements store.GlobalPositionReader.
-func (s *Store) GetLatestGlobalPosition(ctx context.Context, tx pgx.Tx) (int64, error) {
+func buildGetHeadQuery(eventsTable string) string {
 	//nolint:gosec // G201: table name from trusted config, not user input
-	query := fmt.Sprintf(`
-		SELECT global_position
+	return fmt.Sprintf(`
+		SELECT transaction_id, global_position
 		FROM %s
-		ORDER BY global_position DESC
+		WHERE transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+		ORDER BY transaction_id DESC, global_position DESC
 		LIMIT 1
-	`, s.config.EventsTable)
+	`, eventsTable)
+}
 
-	var position int64
-	err := tx.QueryRow(ctx, query).Scan(&position)
+// GetHead implements store.HeadReader.
+func (s *Store) GetHead(ctx context.Context, tx pgx.Tx) (store.Cursor, error) {
+	query := buildGetHeadQuery(s.config.EventsTable)
+
+	var cursor store.Cursor
+	err := tx.QueryRow(ctx, query).Scan(&cursor.TransactionID, &cursor.GlobalPosition)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, nil
+			return store.Cursor{}, nil
 		}
-		return 0, err
+		return store.Cursor{}, err
 	}
 
-	return position, nil
+	return cursor, nil
 }
 
 // ReadStream implements store.StreamReader.

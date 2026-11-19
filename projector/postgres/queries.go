@@ -20,7 +20,6 @@ const (
 	DefaultProjectorInstancesTable    = "projector_instances"
 	DefaultProjectionAssignmentsTable = "projection_assignments"
 	DefaultProjectionCheckpointsTable = "projection_checkpoints"
-	DefaultProjectionGapSkipsTable    = "projection_gap_skips"
 	DefaultProjectorLeaderLeasesTable = "projector_leader_leases"
 )
 

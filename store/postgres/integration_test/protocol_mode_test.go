@@ -251,8 +251,8 @@ func TestStore_InputValidationAndBoundaryConditions(t *testing.T) {
 		t.Errorf("Inverted range read expected empty stream, got %d events", len(emptyStream.Events))
 	}
 
-	// 5. ReadEvents with position beyond highest allocated
-	eventsBeyond, err := pgStore.ReadEvents(ctx, tx, 999999, 10)
+	// 5. ReadEvents with cursor beyond highest allocated
+	eventsBeyond, err := pgStore.ReadEvents(ctx, tx, store.Cursor{TransactionID: 999999999, GlobalPosition: 999999}, 10)
 	if err != nil {
 		t.Errorf("ReadEvents beyond range should not error, got: %v", err)
 	}

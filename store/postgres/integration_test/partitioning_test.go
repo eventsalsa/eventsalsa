@@ -333,19 +333,20 @@ func TestPartitioned_ReadEvents_Pagination(t *testing.T) {
 	defer txRead.Rollback(ctx)
 
 	var allEvents []store.PersistedEvent
-	currentPos := int64(0)
+	var currentCursor store.Cursor
 	pageSize := 4
 
 	for {
-		batch, err := pgStore.ReadEvents(ctx, txRead, currentPos, pageSize)
+		batch, err := pgStore.ReadEvents(ctx, txRead, currentCursor, pageSize)
 		if err != nil {
-			t.Fatalf("ReadEvents at pos %d failed: %v", currentPos, err)
+			t.Fatalf("ReadEvents at cursor %+v failed: %v", currentCursor, err)
 		}
 		if len(batch) == 0 {
 			break
 		}
 		allEvents = append(allEvents, batch...)
-		currentPos = batch[len(batch)-1].GlobalPosition
+		last := batch[len(batch)-1]
+		currentCursor = store.Cursor{TransactionID: last.TransactionID, GlobalPosition: last.GlobalPosition}
 	}
 
 	if len(allEvents) != totalEvents {
@@ -360,8 +361,8 @@ func TestPartitioned_ReadEvents_Pagination(t *testing.T) {
 	}
 }
 
-// TestPartitioned_GetLatestGlobalPosition verifies latest position lookup on partitioned table.
-func TestPartitioned_GetLatestGlobalPosition(t *testing.T) {
+// TestPartitioned_GetHead verifies settled head lookup on a partitioned table.
+func TestPartitioned_GetHead(t *testing.T) {
 	db := getTestDB(t)
 	defer db.Close()
 
@@ -372,12 +373,12 @@ func TestPartitioned_GetLatestGlobalPosition(t *testing.T) {
 	pgStore := postgres.NewStore(postgres.DefaultStoreConfig())
 
 	txRead, _ := db.BeginTx(ctx, nil)
-	pos0, err := pgStore.GetLatestGlobalPosition(ctx, txRead)
+	head0, err := pgStore.GetHead(ctx, txRead)
 	if err != nil {
-		t.Fatalf("GetLatestGlobalPosition on empty store failed: %v", err)
+		t.Fatalf("GetHead on empty store failed: %v", err)
 	}
-	if pos0 != 0 {
-		t.Errorf("Expected 0 on empty store, got %d", pos0)
+	if !head0.IsZero() {
+		t.Errorf("Expected zero cursor on empty store, got %+v", head0)
 	}
 	_ = txRead.Rollback(ctx)
 
@@ -403,12 +404,12 @@ func TestPartitioned_GetLatestGlobalPosition(t *testing.T) {
 	txRead2, _ := db.BeginTx(ctx, nil)
 	defer txRead2.Rollback(ctx)
 
-	pos8, err := pgStore.GetLatestGlobalPosition(ctx, txRead2)
+	head8, err := pgStore.GetHead(ctx, txRead2)
 	if err != nil {
-		t.Fatalf("GetLatestGlobalPosition failed: %v", err)
+		t.Fatalf("GetHead failed: %v", err)
 	}
-	if pos8 != 8 {
-		t.Errorf("Expected latest position 8, got %d", pos8)
+	if head8.GlobalPosition != 8 || head8.TransactionID == 0 {
+		t.Errorf("Expected head GlobalPosition=8 with non-zero TransactionID, got %+v", head8)
 	}
 }
 

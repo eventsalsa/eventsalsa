@@ -495,11 +495,11 @@ func TestDetachedProjection_CheckpointWriteFailureReplaysAfterFailure(t *testing
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
 	first := appended[0].GlobalPosition
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		if times := projection.timesApplied(first); times < 2 {
 			return fmt.Errorf("first event applied %d times, want at least 2 after the checkpoint failure", times)
@@ -532,11 +532,11 @@ func TestDetachedProjection_CheckpointSerializationRetryAppliesOnce(t *testing.T
 	harness := newFaultDaemonHarness(t, realDB, faults, registry, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		return nil
 	})
@@ -574,12 +574,12 @@ func TestDetachedProjection_CheckpointConnectionDropRecovers(t *testing.T) {
 	harness := newFaultDaemonHarness(t, realDB, faults, registry, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		checkpoint := getCheckpoint(t, controlDB, projection.Name())
 		if checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovering from the connection drop", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovering from the connection drop", checkpoint, latest)
 		}
 		return nil
 	})
@@ -611,13 +611,13 @@ func TestDetachedBatchProjection_PartialFailureKeepsCheckpointAndRecovers(t *tes
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 4, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 	failing := appended[2].GlobalPosition
 	projection.failAt(failing, -1, errors.New("bulk import rejected document"))
 
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-			return fmt.Errorf("checkpoint=%d want 0 while the batch is failing", checkpoint)
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+			return fmt.Errorf("checkpoint=%+v want zero while the batch is failing", checkpoint)
 		}
 		if times := projection.timesApplied(appended[0].GlobalPosition); times == 0 {
 			return errors.New("the applied prefix was not delivered before the failure")
@@ -633,7 +633,7 @@ func TestDetachedBatchProjection_PartialFailureKeepsCheckpointAndRecovers(t *tes
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovery", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovery", checkpoint, latest)
 		}
 		return nil
 	})
@@ -650,14 +650,15 @@ func TestDetachedProjection_CheckpointMovedDuringApplyDoesNotRegress(t *testing.
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
 	projection := &scriptedDetachedProjection{name: "detached-moved", entered: make(chan struct{}, 64)}
 
+	movedTarget := store.Cursor{TransactionID: 999999999, GlobalPosition: 99}
 	var once sync.Once
 	projection.onHandle = func(store.PersistedEvent) {
 		once.Do(func() {
 			// Simulate another worker advancing the checkpoint past our target
 			// while the batch is being applied externally.
 			_, err := controlDB.Exec(context.Background(),
-				`UPDATE projection_checkpoints SET last_position = 99, updated_at = NOW() WHERE projection_name = $1`,
-				projection.Name())
+				`UPDATE projection_checkpoints SET last_transaction_id = $1::text::xid8, last_position = $2, updated_at = NOW() WHERE projection_name = $3`,
+				fmt.Sprintf("%d", movedTarget.TransactionID), movedTarget.GlobalPosition, projection.Name())
 			if err != nil {
 				t.Errorf("advance checkpoint during apply: %v", err)
 			}
@@ -676,8 +677,8 @@ func TestDetachedProjection_CheckpointMovedDuringApplyDoesNotRegress(t *testing.
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		checkpoint := getCheckpoint(t, controlDB, projection.Name())
-		if checkpoint < 99 {
-			return fmt.Errorf("checkpoint=%d, moved value 99 was regressed", checkpoint)
+		if checkpoint.Before(movedTarget) {
+			return fmt.Errorf("checkpoint=%+v, moved value %+v was regressed", checkpoint, movedTarget)
 		}
 		return nil
 	})
@@ -735,8 +736,8 @@ func TestDetachedProjection_OwnershipLostBetweenApplyAndCheckpoint(t *testing.T)
 
 	time.Sleep(500 * time.Millisecond)
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d, want 0: the old owner must not write a checkpoint after losing ownership", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v, want zero: the old owner must not write a checkpoint after losing ownership", checkpoint)
 	}
 
 	harness.stop(t)
@@ -774,8 +775,8 @@ func TestDetachedProjection_ShutdownDuringApplyDoesNotAdvanceCheckpoint(t *testi
 
 	harness.stop(t)
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d, want 0: an interrupted detached apply must not be checkpointed", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v, want zero: an interrupted detached apply must not be checkpointed", checkpoint)
 	}
 }
 
@@ -804,7 +805,7 @@ func TestDetachedProjection_ApplyExceedsBatchTimeoutRecovers(t *testing.T) {
 	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		select {
@@ -817,15 +818,15 @@ func TestDetachedProjection_ApplyExceedsBatchTimeoutRecovers(t *testing.T) {
 
 	time.Sleep(600 * time.Millisecond)
 
-	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != 0 {
-		t.Fatalf("checkpoint=%d want 0 while the apply is blocked past the batch timeout", checkpoint)
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v want zero while the apply is blocked past the batch timeout", checkpoint)
 	}
 
 	close(gate)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovery", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovery", checkpoint, latest)
 		}
 		return nil
 	})

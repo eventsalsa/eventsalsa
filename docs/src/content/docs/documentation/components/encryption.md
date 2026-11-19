@@ -685,6 +685,7 @@ CREATE TABLE read_model.user_directory_v1 (
     full_name_ciphertext TEXT NOT NULL,
     key_version INT NOT NULL,
     email_bidx TEXT NOT NULL UNIQUE,
+    last_transaction_id xid8 NOT NULL DEFAULT '0',
     last_global_position BIGINT NOT NULL DEFAULT 0
 );
 
@@ -701,6 +702,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"eventsalsa.dev/encryption/envelope"
 	"eventsalsa.dev/encryption/postgres"
@@ -739,17 +741,19 @@ func (p *UserDirectoryProjection) Handle(ctx context.Context, tx pgx.Tx, event s
 
 		_, err := tx.Exec(ctx, `
 			INSERT INTO read_model.user_directory_v1 (
-				user_id, email_ciphertext, full_name_ciphertext, key_version, email_bidx, last_global_position
+				user_id, email_ciphertext, full_name_ciphertext, key_version, email_bidx, last_transaction_id, last_global_position
 			)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			VALUES ($1, $2, $3, $4, $5, $6::text::xid8, $7)
 			ON CONFLICT (user_id) DO UPDATE
 			SET email_ciphertext = EXCLUDED.email_ciphertext,
 			    full_name_ciphertext = EXCLUDED.full_name_ciphertext,
 			    key_version = EXCLUDED.key_version,
 			    email_bidx = EXCLUDED.email_bidx,
+			    last_transaction_id = EXCLUDED.last_transaction_id,
 			    last_global_position = EXCLUDED.last_global_position
-			WHERE read_model.user_directory_v1.last_global_position < EXCLUDED.last_global_position
-		`, payload.UserID, payload.EmailCiphertext, payload.FullNameCiphertext, payload.KeyVersion, payload.EmailBidx, event.GlobalPosition)
+			WHERE (read_model.user_directory_v1.last_transaction_id, read_model.user_directory_v1.last_global_position)
+			    < (EXCLUDED.last_transaction_id, EXCLUDED.last_global_position)
+		`, payload.UserID, payload.EmailCiphertext, payload.FullNameCiphertext, payload.KeyVersion, payload.EmailBidx, strconv.FormatUint(event.TransactionID, 10), event.GlobalPosition)
 		return err
 
 	case "UserDeleted":

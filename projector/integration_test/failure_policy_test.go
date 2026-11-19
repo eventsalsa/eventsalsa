@@ -24,10 +24,11 @@ func TestFailurePolicy_RetryableFailureIsNotFatal(t *testing.T) {
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Product")
-	latest := appended[0].GlobalPosition
+	failingPos := appended[0].GlobalPosition
+	latest := cursorOf(appended)
 
 	projection := &scriptedDetachedProjection{name: "retryable-policy", entered: make(chan struct{}, 64)}
-	projection.failAt(latest, -1, projectorfailure.Retryable(errors.New("search index unavailable")))
+	projection.failAt(failingPos, -1, projectorfailure.Retryable(errors.New("search index unavailable")))
 	observer := &testIntegrationObserver{}
 
 	registry := projectorpkg.NewRegistry()
@@ -52,11 +53,11 @@ func TestFailurePolicy_RetryableFailureIsNotFatal(t *testing.T) {
 	default:
 	}
 
-	projection.failAt(latest, 0, nil)
+	projection.failAt(failingPos, 0, nil)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after recovery", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after recovery", checkpoint, latest)
 		}
 		return nil
 	})
@@ -131,7 +132,7 @@ func TestFailurePolicy_PoisonHandlerSkipsBatchAndAdvancesCheckpoint(t *testing.T
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Product")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	projection := &scriptedDetachedProjection{name: "poison-policy", entered: make(chan struct{}, 64)}
 	projection.failAt(appended[1].GlobalPosition, -1, projectorfailure.Permanent(errors.New("malformed document")))
@@ -165,7 +166,7 @@ func TestFailurePolicy_PoisonHandlerSkipsBatchAndAdvancesCheckpoint(t *testing.T
 			return errors.New("no poison skip observed yet")
 		}
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the skip", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after the skip", checkpoint, latest)
 		}
 		return nil
 	})
@@ -179,11 +180,11 @@ func TestFailurePolicy_PoisonHandlerSkipsBatchAndAdvancesCheckpoint(t *testing.T
 
 	// The projection must continue after the skip.
 	more := appendTestEvents(t, controlDB, eventStore, 1, "Product")
-	finalLatest := more[0].GlobalPosition
+	finalLatest := cursorOf(more)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != finalLatest {
-			return fmt.Errorf("checkpoint=%d want %d after continuing past the poison batch", checkpoint, finalLatest)
+			return fmt.Errorf("checkpoint=%+v want %+v after continuing past the poison batch", checkpoint, finalLatest)
 		}
 		return nil
 	})

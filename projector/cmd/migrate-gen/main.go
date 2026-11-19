@@ -35,7 +35,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	projectorInstancesTable := flags.String("projector-instances-table", config.ProjectorInstancesTable, "Name of projector instances table")
 	projectionAssignmentsTable := flags.String("projection-assignments-table", config.ProjectionAssignmentsTable, "Name of projection assignments table")
 	projectionCheckpointsTable := flags.String("projection-checkpoints-table", config.ProjectionCheckpointsTable, "Name of projection checkpoints table")
-	projectionGapSkipsTable := flags.String("projection-gap-skips-table", config.ProjectionGapSkipsTable, "Name of projection gap skips table")
 	projectorLeaderLeasesTable := flags.String("projector-leader-leases-table", config.ProjectorLeaderLeasesTable, "Name of leader lease table")
 
 	if err := flags.Parse(args); err != nil {
@@ -50,7 +49,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	config.ProjectorInstancesTable = *projectorInstancesTable
 	config.ProjectionAssignmentsTable = *projectionAssignmentsTable
 	config.ProjectionCheckpointsTable = *projectionCheckpointsTable
-	config.ProjectionGapSkipsTable = *projectionGapSkipsTable
 	config.ProjectorLeaderLeasesTable = *projectorLeaderLeasesTable
 
 	if *outputFilename != "" {

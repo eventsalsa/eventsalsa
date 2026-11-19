@@ -253,8 +253,7 @@ func WithPoisonHandler(handler PoisonHandler) RegistrationOption {
 }
 
 // OnStreamTypes limits a projection to the given stream types. Events from other
-// stream types are skipped while checkpoints still advance to the unscoped
-// safe frontier.
+// stream types are skipped while checkpoints still advance across the read window.
 func OnStreamTypes(streamTypes ...string) RegistrationOption {
 	return func(cfg *registrationConfig) {
 		cfg.streamTypes = stringSet(streamTypes)
@@ -262,8 +261,7 @@ func OnStreamTypes(streamTypes ...string) RegistrationOption {
 }
 
 // OnEventTypes limits a projection to the given event types. Events with other
-// event types are skipped while checkpoints still advance to the unscoped
-// safe frontier.
+// event types are skipped while checkpoints still advance across the read window.
 func OnEventTypes(eventTypes ...string) RegistrationOption {
 	return func(cfg *registrationConfig) {
 		cfg.eventTypes = stringSet(eventTypes)

@@ -45,13 +45,13 @@ func (p *slowTxProjection) Handle(ctx context.Context, tx pgx.Tx, event store.Pe
 
 	_, err := tx.Exec(ctx, `
 INSERT INTO test_projection_events (
-projection_name,
-global_position,
-stream_type,
-stream_id,
-event_type,
-handled_by,
-attempt_no
+	projection_name,
+	global_position,
+	stream_type,
+	stream_id,
+	event_type,
+	handled_by,
+	attempt_no
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 `, p.name, event.GlobalPosition, event.StreamType, event.StreamID, event.EventType, p.label, 1)
 	if err != nil {
@@ -61,7 +61,66 @@ attempt_no
 	return nil
 }
 
-func TestGap_CheckpointNeverRegresses(t *testing.T) {
+// stubbornTxProjection blocks in its handler and deliberately ignores context
+// cancellation, so shutdown has to give up after ShutdownTimeout.
+type stubbornTxProjection struct {
+	name     string
+	label    string
+	entered  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+}
+
+func (p *stubbornTxProjection) Name() string { return p.name }
+
+//nolint:gocritic // hugeParam: implements the Projection contract
+func (p *stubbornTxProjection) Handle(ctx context.Context, tx pgx.Tx, event store.PersistedEvent) error {
+	defer close(p.finished)
+
+	select {
+	case p.entered <- struct{}{}:
+	default:
+	}
+
+	<-p.release
+
+	_, err := tx.Exec(ctx, `
+INSERT INTO test_projection_events (
+	projection_name,
+	global_position,
+	stream_type,
+	stream_id,
+	event_type,
+	handled_by,
+	attempt_no
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+`, p.name, event.GlobalPosition, event.StreamType, event.StreamID, event.EventType, p.label, 1)
+	if err != nil {
+		return fmt.Errorf("insert stubborn projection row: %w", err)
+	}
+
+	return nil
+}
+
+func saveCheckpointInTx(t *testing.T, ctx context.Context, db interface {
+	Begin(context.Context) (pgx.Tx, error)
+}, table, name string, cursor store.Cursor) {
+	t.Helper()
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin save checkpoint transaction: %v", err)
+	}
+	if err := projectorpostgres.SaveCheckpoint(ctx, tx, table, name, cursor); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("save checkpoint %+v: %v", cursor, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit checkpoint %+v: %v", cursor, err)
+	}
+}
+
+func TestCheckpointNeverRegresses(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -71,34 +130,29 @@ func TestGap_CheckpointNeverRegresses(t *testing.T) {
 	table := projectorpostgres.DefaultProjectionCheckpointsTable
 	const name = "monotonic-projection"
 
-	tx, err := controlDB.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin save transaction: %v", err)
-	}
-	if err := projectorpostgres.SaveCheckpoint(ctx, tx, table, name, 10); err != nil {
-		t.Fatalf("save checkpoint 10: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit checkpoint 10: %v", err)
+	initial := store.Cursor{TransactionID: 10, GlobalPosition: 5}
+	saveCheckpointInTx(t, ctx, controlDB, table, name, initial)
+
+	lowerTxHigherPos := store.Cursor{TransactionID: 9, GlobalPosition: 99}
+	saveCheckpointInTx(t, ctx, controlDB, table, name, lowerTxHigherPos)
+	if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != initial {
+		t.Fatalf("checkpoint=%+v, want %+v: a lower transaction ID must not regress the checkpoint even with higher global_position", checkpoint, initial)
 	}
 
-	lower, err := controlDB.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin lower transaction: %v", err)
-	}
-	if err := projectorpostgres.SaveCheckpoint(ctx, lower, table, name, 3); err != nil {
-		t.Fatalf("save checkpoint 3: %v", err)
-	}
-	if err := lower.Commit(ctx); err != nil {
-		t.Fatalf("commit checkpoint 3: %v", err)
+	sameTxLowerPos := store.Cursor{TransactionID: 10, GlobalPosition: 3}
+	saveCheckpointInTx(t, ctx, controlDB, table, name, sameTxLowerPos)
+	if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != initial {
+		t.Fatalf("checkpoint=%+v, want %+v: a lower global_position at equal transaction ID must not regress the checkpoint", checkpoint, initial)
 	}
 
-	if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != 10 {
-		t.Fatalf("checkpoint=%d, want 10: a lower position must not regress the checkpoint", checkpoint)
+	higherTxLowerPos := store.Cursor{TransactionID: 11, GlobalPosition: 1}
+	saveCheckpointInTx(t, ctx, controlDB, table, name, higherTxLowerPos)
+	if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != higherTxLowerPos {
+		t.Fatalf("checkpoint=%+v, want %+v: a higher transaction ID must advance the checkpoint even with lower global_position", checkpoint, higherTxLowerPos)
 	}
 }
 
-func TestGap_HeartbeatRegistrationLossIsFatal(t *testing.T) {
+func TestHeartbeatRegistrationLossIsFatal(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -129,7 +183,7 @@ func TestGap_HeartbeatRegistrationLossIsFatal(t *testing.T) {
 	}
 }
 
-func TestGap_MaxConsecutiveFailuresIsFatal(t *testing.T) {
+func TestMaxConsecutiveFailuresIsFatal(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -161,7 +215,7 @@ func TestGap_MaxConsecutiveFailuresIsFatal(t *testing.T) {
 	}
 }
 
-func TestGap_GracefulShutdownDrainsInFlightBatch(t *testing.T) {
+func TestGracefulShutdownDrainsInFlightBatch(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -187,7 +241,7 @@ func TestGap_GracefulShutdownDrainsInFlightBatch(t *testing.T) {
 	})
 
 	appended := appendTestEvents(t, controlDB, eventStore, 1, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		select {
@@ -201,33 +255,35 @@ func TestGap_GracefulShutdownDrainsInFlightBatch(t *testing.T) {
 	harness.stop(t)
 
 	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-		t.Fatalf("checkpoint=%d want %d: an in-flight batch should drain within ShutdownTimeout", checkpoint, latest)
+		t.Fatalf("checkpoint=%+v want %+v: an in-flight batch should drain within ShutdownTimeout", checkpoint, latest)
 	}
 	if rows := getHandledRows(t, controlDB, projection.Name()); len(rows) != 1 {
 		t.Fatalf("handled rows=%d, want 1 after draining", len(rows))
 	}
 }
 
-func TestGap_SequentialStaleSkipsAreAudited(t *testing.T) {
+func TestShutdownTimeout_ForceCancelsHandlerThatIgnoresContext(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
 	defer cleanupTables(t, controlDB)
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	const name = "sequential-gaps"
+	projection := &stubbornTxProjection{
+		name:     "stubborn-projection",
+		label:    "projector-1",
+		entered:  make(chan struct{}, 8),
+		release:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
 
-	options := append(defaultProjectorOptions(),
-		projectorpkg.WithStaleGapThreshold(250*time.Millisecond),
-		projectorpkg.WithStaleGapHarborLag(1),
-		projectorpkg.WithPollInterval(500*time.Millisecond),
-		projectorpkg.WithMaxPollInterval(500*time.Millisecond),
-		projectorpkg.WithBatchPause(500*time.Millisecond),
-	)
+	registry := projectorpkg.NewRegistry()
+	if err := registry.AddProjection(projection); err != nil {
+		t.Fatalf("register projection: %v", err)
+	}
 
-	projector := startTestProjector(t, "projector-1", []*testProjection{
-		newTestProjection(name, "projector-1", nil),
-	}, options...)
+	options := append(defaultProjectorOptions(), projectorpkg.WithShutdownTimeout(300*time.Millisecond))
+	harness := startTestProjectorFromRegistry(t, "projector-1", registry, 8, options...)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		assignments := getAssignments(t, controlDB)
@@ -237,41 +293,39 @@ func TestGap_SequentialStaleSkipsAreAudited(t *testing.T) {
 		return nil
 	})
 
-	held1 := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Shipment", Count: 1})
-	appendTestEvents(t, controlDB, eventStore, 4, "Shipment")
+	appendTestEvents(t, controlDB, eventStore, 1, "Order")
 
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if skips := getGapSkipRows(t, controlDB, name); len(skips) != 1 {
-			return fmt.Errorf("gap skips=%d, want 1", len(skips))
+		select {
+		case <-projection.entered:
+			return nil
+		default:
+			return errors.New("stubborn handler was not entered yet")
 		}
-		return nil
 	})
 
-	held1.Rollback(t)
+	start := time.Now()
+	harness.stop(t)
+	elapsed := time.Since(start)
 
-	held2 := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Shipment", Count: 1})
-	appendTestEvents(t, controlDB, eventStore, 4, "Shipment")
-
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if skips := getGapSkipRows(t, controlDB, name); len(skips) != 2 {
-			return fmt.Errorf("gap skips=%d, want 2", len(skips))
-		}
-		return nil
-	})
-
-	projector.stop(t)
-	held2.Rollback(t)
-
-	skips := getGapSkipRows(t, controlDB, name)
-	if len(skips) != 2 {
-		t.Fatalf("gap skips=%d, want 2", len(skips))
+	// Release the leaked handler goroutine and wait for it to finish before the
+	// test tears down the pool or the tables.
+	close(projection.release)
+	select {
+	case <-projection.finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stubborn handler did not finish after release")
 	}
-	if skips[0].GapPosition == skips[1].GapPosition {
-		t.Fatalf("both skip rows report gap position %d", skips[0].GapPosition)
+
+	if elapsed > 5*time.Second {
+		t.Fatalf("shutdown took %v; it should give up after ShutdownTimeout instead of blocking", elapsed)
+	}
+	if checkpoint := getCheckpoint(t, controlDB, projection.Name()); !checkpoint.IsZero() {
+		t.Fatalf("checkpoint=%+v, want zero: a batch canceled by shutdown must not be checkpointed", checkpoint)
 	}
 }
 
-func TestGap_RealSerializationFailureIsRetried(t *testing.T) {
+func TestRealSerializationFailureIsRetried(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
@@ -281,12 +335,7 @@ func TestGap_RealSerializationFailureIsRetried(t *testing.T) {
 	const name = "serialization-recovery"
 	ctx := context.Background()
 
-	if _, err := controlDB.Exec(ctx, `
-INSERT INTO projection_checkpoints (projection_name, last_position, created_at, updated_at)
-VALUES ($1, 0, NOW(), NOW())
-ON CONFLICT (projection_name) DO NOTHING`, name); err != nil {
-		t.Fatalf("seed checkpoint row: %v", err)
-	}
+	seedCheckpoint(t, controlDB, name, store.Cursor{})
 
 	// A sequence-backed trigger raises a genuine SQLSTATE 40001 from the server on
 	// the first checkpoint update, then lets later updates through. Sequences are
@@ -323,11 +372,11 @@ FOR EACH ROW EXECUTE FUNCTION cp_fault_40001()`,
 	})
 
 	appended := appendTestEvents(t, controlDB, eventStore, 2, "Order")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, name); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d after the serialization failure", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v after the serialization failure", checkpoint, latest)
 		}
 		return nil
 	})
@@ -343,7 +392,7 @@ FOR EACH ROW EXECUTE FUNCTION cp_fault_40001()`,
 	harness.stop(t)
 }
 
-func TestGap_ErrgroupPropagatesFatalToSibling(t *testing.T) {
+func TestErrgroupPropagatesFatalToSibling(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)

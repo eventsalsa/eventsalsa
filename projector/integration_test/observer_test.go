@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -21,8 +20,6 @@ type testIntegrationObserver struct {
 	mu         sync.Mutex
 	batches    []projectorpkg.BatchStats
 	heartbeats []projectorpkg.DaemonStats
-	gaps       []projectorpkg.GapStats
-	skipped    []projectorpkg.GapStats
 	degraded   []projectorpkg.DegradedStats
 	poison     []projectorpkg.PoisonBatchStats
 	rebalances []map[string]uuid.UUID
@@ -39,18 +36,6 @@ func (o *testIntegrationObserver) OnHeartbeat(_ context.Context, stats projector
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.heartbeats = append(o.heartbeats, stats)
-}
-
-func (o *testIntegrationObserver) OnGapDetected(_ context.Context, stats projectorpkg.GapStats) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.gaps = append(o.gaps, stats)
-}
-
-func (o *testIntegrationObserver) OnGapSkipped(_ context.Context, stats projectorpkg.GapStats) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.skipped = append(o.skipped, stats)
 }
 
 func (o *testIntegrationObserver) OnProjectionDegraded(_ context.Context, stats projectorpkg.DegradedStats) {
@@ -87,18 +72,6 @@ func (o *testIntegrationObserver) Heartbeats() []projectorpkg.DaemonStats {
 	return append([]projectorpkg.DaemonStats(nil), o.heartbeats...)
 }
 
-func (o *testIntegrationObserver) Gaps() []projectorpkg.GapStats {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return append([]projectorpkg.GapStats(nil), o.gaps...)
-}
-
-func (o *testIntegrationObserver) Skipped() []projectorpkg.GapStats {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return append([]projectorpkg.GapStats(nil), o.skipped...)
-}
-
 func (o *testIntegrationObserver) Degraded() []projectorpkg.DegradedStats {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -114,15 +87,15 @@ func (o *testIntegrationObserver) PoisonSkipped() []projectorpkg.PoisonBatchStat
 func (o *testIntegrationObserver) Rebalances() []map[string]uuid.UUID {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	copied := make([]map[string]uuid.UUID, len(o.rebalances))
-	for i, reb := range o.rebalances {
-		m := make(map[string]uuid.UUID, len(reb))
-		for k, v := range reb {
-			m[k] = v
+	out := make([]map[string]uuid.UUID, len(o.rebalances))
+	for i, r := range o.rebalances {
+		copied := make(map[string]uuid.UUID, len(r))
+		for k, v := range r {
+			copied[k] = v
 		}
-		copied[i] = m
+		out[i] = copied
 	}
-	return copied
+	return out
 }
 
 func TestIntegration_Observer_FullLifecycle(t *testing.T) {
@@ -140,29 +113,33 @@ func TestIntegration_Observer_FullLifecycle(t *testing.T) {
 	)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if len(observer.Heartbeats()) == 0 {
-			return fmt.Errorf("no heartbeats received by observer yet")
-		}
-		if len(observer.Rebalances()) == 0 {
-			return fmt.Errorf("no rebalances received by observer yet")
+		assignments := getAssignments(t, controlDB)
+		if len(assignments) != 1 || !assignments[0].Assigned {
+			return fmt.Errorf("projection not assigned yet")
 		}
 		return nil
 	})
 
 	appended := appendTestEvents(t, controlDB, eventStore, 5, "Account")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		batches := observer.Batches()
 		if len(batches) == 0 {
 			return fmt.Errorf("no batch stats observed yet")
 		}
 		lastBatch := batches[len(batches)-1]
-		if lastBatch.LastPosition != latest {
-			return fmt.Errorf("last batch position=%d want %d", lastBatch.LastPosition, latest)
+		if lastBatch.LastPosition != latest.GlobalPosition || lastBatch.LastTransactionID != latest.TransactionID {
+			return fmt.Errorf("last batch cursor=(%d,%d) want %+v", lastBatch.LastTransactionID, lastBatch.LastPosition, latest)
+		}
+		if lastBatch.StartTransactionID != 0 || lastBatch.StartPosition != 0 {
+			return fmt.Errorf("last batch start cursor=(%d,%d) want (0,0)", lastBatch.StartTransactionID, lastBatch.StartPosition)
+		}
+		if lastBatch.HeadPosition != latest.GlobalPosition || lastBatch.HeadTransactionID != latest.TransactionID {
+			return fmt.Errorf("last batch head=(%d,%d) want %+v", lastBatch.HeadTransactionID, lastBatch.HeadPosition, latest)
 		}
 		if lastBatch.EventsHandled != 5 {
 			return fmt.Errorf("last batch handled=%d want 5", lastBatch.EventsHandled)
@@ -173,21 +150,23 @@ func TestIntegration_Observer_FullLifecycle(t *testing.T) {
 		return nil
 	})
 
-	heartbeats := observer.Heartbeats()
-	if len(heartbeats) == 0 {
-		t.Fatal("expected heartbeats in observer")
-	}
-	if heartbeats[0].InstanceID != projector.daemon.ID() {
-		t.Fatalf("heartbeat InstanceID = %v, want %v", heartbeats[0].InstanceID, projector.daemon.ID())
-	}
-
-	rebalances := observer.Rebalances()
-	if len(rebalances) == 0 {
-		t.Fatal("expected rebalances in observer")
-	}
-	if rebalances[0][projection.Name()] != projector.daemon.ID() {
-		t.Fatalf("rebalance mapping for %s = %v, want %v", projection.Name(), rebalances[0][projection.Name()], projector.daemon.ID())
-	}
+	waitForErr(t, defaultWaitTimeout, func() error {
+		heartbeats := observer.Heartbeats()
+		if len(heartbeats) == 0 {
+			return fmt.Errorf("expected heartbeats in observer")
+		}
+		if heartbeats[0].InstanceID != projector.daemon.ID() {
+			return fmt.Errorf("heartbeat InstanceID = %v, want %v", heartbeats[0].InstanceID, projector.daemon.ID())
+		}
+		rebalances := observer.Rebalances()
+		if len(rebalances) == 0 {
+			return fmt.Errorf("expected rebalances in observer")
+		}
+		if rebalances[0][projection.Name()] != projector.daemon.ID() {
+			return fmt.Errorf("rebalance mapping for %s = %v, want %v", projection.Name(), rebalances[0][projection.Name()], projector.daemon.ID())
+		}
+		return nil
+	})
 }
 
 func TestIntegration_Observer_BacklogCatchupLag(t *testing.T) {
@@ -199,7 +178,7 @@ func TestIntegration_Observer_BacklogCatchupLag(t *testing.T) {
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
 	// Seed 60 events prior to starting projector
 	appended := appendTestEvents(t, controlDB, eventStore, 60, "Invoice")
-	latest := appended[len(appended)-1].GlobalPosition
+	latest := cursorOf(appended)
 
 	projection := newTestProjection("projection-observer-lag", "projector-1", nil)
 	observer := &testIntegrationObserver{}
@@ -213,7 +192,7 @@ func TestIntegration_Observer_BacklogCatchupLag(t *testing.T) {
 
 	waitForErr(t, defaultWaitTimeout, func() error {
 		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, latest)
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
 		}
 		batches := observer.Batches()
 		if len(batches) < 3 {
@@ -231,86 +210,86 @@ func TestIntegration_Observer_BacklogCatchupLag(t *testing.T) {
 			t.Fatalf("batch %d duration = %v, want > 0", i, b.Duration)
 		}
 	}
+	if batches[0].Lag == 0 {
+		t.Fatalf("first batch Lag = 0, want > 0 during backlog catch-up")
+	}
 	// Last batch should be caught up
 	last := batches[len(batches)-1]
-	if last.LastPosition != latest {
-		t.Fatalf("last batch LastPosition = %d, want %d", last.LastPosition, latest)
+	if last.LastPosition != latest.GlobalPosition || last.LastTransactionID != latest.TransactionID {
+		t.Fatalf("last batch cursor = (%d,%d), want %+v", last.LastTransactionID, last.LastPosition, latest)
+	}
+	if last.HeadPosition != latest.GlobalPosition || last.HeadTransactionID != latest.TransactionID {
+		t.Fatalf("last batch head = (%d,%d), want %+v", last.HeadTransactionID, last.HeadPosition, latest)
+	}
+	if last.Lag != 0 {
+		t.Fatalf("last batch Lag = %d, want 0 once caught up", last.Lag)
 	}
 }
 
-func TestIntegration_Observer_GapDetectionAndStaleSkip(t *testing.T) {
+func TestIntegration_Observer_TransactionIDsAndHeadLag(t *testing.T) {
 	controlDB := openTestDB(t)
 	defer controlDB.Close()
 	setupSchema(t, controlDB)
 	defer cleanupTables(t, controlDB)
 
 	eventStore := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	projection := newTestProjection("projection-observer-gap", "projector-1", nil)
+	firstTx := appendTestEvents(t, controlDB, eventStore, 3, "Order")
+	secondTx := appendTestEvents(t, controlDB, eventStore, 3, "Order")
+	latest := cursorOf(secondTx)
+
+	projection := newTestProjection("projection-observer-xid", "projector-1", nil)
 	observer := &testIntegrationObserver{}
 
-	projector := startTestProjector(t, "projector-1", []*testProjection{projection},
+	harness := startTestProjector(t, "projector-1", []*testProjection{projection},
 		append(defaultProjectorOptions(),
-			projectorpkg.WithStaleGapThreshold(250*time.Millisecond),
-			projectorpkg.WithStaleGapHarborLag(1),
-			projectorpkg.WithPollInterval(200*time.Millisecond),
+			projectorpkg.WithBatchSize(3),
 			projectorpkg.WithObserver(observer),
 		)...,
 	)
 
-	held := beginControlledAppend(t, controlDB, eventStore, testEventBatch{StreamType: "Order", Count: 1})
-	later := appendTestEvents(t, controlDB, eventStore, 4, "Order")
-	expectedSkipTo := later[len(later)-2].GlobalPosition
-
-	// Wait for gap detection
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if len(observer.Gaps()) == 0 {
-			return fmt.Errorf("no gap detected by observer yet")
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != latest {
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, latest)
+		}
+		batches := observer.Batches()
+		if len(batches) < 2 {
+			return fmt.Errorf("observed %d batches, want at least 2", len(batches))
 		}
 		return nil
 	})
-
-	gapStats := observer.Gaps()[0]
-	if gapStats.ProjectionName != projection.Name() {
-		t.Fatalf("gap ProjectionName = %q, want %q", gapStats.ProjectionName, projection.Name())
-	}
-	if gapStats.GapPosition != held.events[0].GlobalPosition {
-		t.Fatalf("gap GapPosition = %d, want %d", gapStats.GapPosition, held.events[0].GlobalPosition)
-	}
-
-	// Wait for stale gap skip
-	waitForErr(t, defaultWaitTimeout, func() error {
-		if len(observer.Skipped()) == 0 {
-			return fmt.Errorf("no gap skip observed yet")
-		}
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != expectedSkipTo {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, expectedSkipTo)
-		}
-		return nil
-	})
-
-	projector.stop(t)
-	held.Rollback(t)
-
-	skipped := observer.Skipped()[0]
-	if skipped.ProjectionName != projection.Name() {
-		t.Fatalf("skipped ProjectionName = %q, want %q", skipped.ProjectionName, projection.Name())
-	}
-	if skipped.GapPosition != held.events[0].GlobalPosition {
-		t.Fatalf("skipped GapPosition = %d, want %d", skipped.GapPosition, held.events[0].GlobalPosition)
-	}
+	harness.stop(t)
 
 	batches := observer.Batches()
-	foundStaleSkipped := false
-	for _, b := range batches {
-		if b.StaleSkipped {
-			foundStaleSkipped = true
-			if b.LastPosition != expectedSkipTo {
-				t.Fatalf("stale skipped batch LastPosition = %d, want %d", b.LastPosition, expectedSkipTo)
-			}
-		}
+	firstBatch := batches[0]
+	if firstBatch.StartTransactionID != 0 || firstBatch.StartPosition != 0 {
+		t.Fatalf("first batch start = (%d,%d), want (0,0)", firstBatch.StartTransactionID, firstBatch.StartPosition)
 	}
-	if !foundStaleSkipped {
-		t.Fatal("expected at least one batch with StaleSkipped = true")
+	if firstBatch.LastTransactionID != firstTx[2].TransactionID || firstBatch.LastPosition != firstTx[2].GlobalPosition {
+		t.Fatalf("first batch end = (%d,%d), want (%d,%d)",
+			firstBatch.LastTransactionID, firstBatch.LastPosition,
+			firstTx[2].TransactionID, firstTx[2].GlobalPosition)
+	}
+	if firstBatch.HeadTransactionID != latest.TransactionID || firstBatch.HeadPosition != latest.GlobalPosition {
+		t.Fatalf("first batch head = (%d,%d), want %+v",
+			firstBatch.HeadTransactionID, firstBatch.HeadPosition, latest)
+	}
+	wantFirstLag := secondTx[2].GlobalPosition - firstTx[2].GlobalPosition
+	if firstBatch.Lag != wantFirstLag {
+		t.Fatalf("first batch Lag = %d, want %d", firstBatch.Lag, wantFirstLag)
+	}
+
+	lastBatch := batches[len(batches)-1]
+	if lastBatch.StartTransactionID != firstTx[2].TransactionID || lastBatch.StartPosition != firstTx[2].GlobalPosition {
+		t.Fatalf("last batch start = (%d,%d), want (%d,%d)",
+			lastBatch.StartTransactionID, lastBatch.StartPosition,
+			firstTx[2].TransactionID, firstTx[2].GlobalPosition)
+	}
+	if lastBatch.LastTransactionID != latest.TransactionID || lastBatch.LastPosition != latest.GlobalPosition {
+		t.Fatalf("last batch end = (%d,%d), want %+v",
+			lastBatch.LastTransactionID, lastBatch.LastPosition, latest)
+	}
+	if lastBatch.Lag != 0 {
+		t.Fatalf("last batch Lag = %d, want 0", lastBatch.Lag)
 	}
 }
 
@@ -330,7 +309,7 @@ func TestIntegration_Observer_BatchFailureAndRecovery(t *testing.T) {
 
 	appended := appendTestEvents(t, controlDB, eventStore, 3, "Customer")
 	failingPos := appended[1].GlobalPosition
-	lastPos := appended[2].GlobalPosition
+	lastCursor := cursorOf(appended)
 
 	projection.FailUntilCleared(failingPos, errors.New("simulated transient handler failure"))
 
@@ -349,16 +328,16 @@ func TestIntegration_Observer_BatchFailureAndRecovery(t *testing.T) {
 	projection.ClearFailure(failingPos)
 
 	waitForErr(t, defaultWaitTimeout, func() error {
-		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != lastPos {
-			return fmt.Errorf("checkpoint=%d want %d", checkpoint, lastPos)
+		if checkpoint := getCheckpoint(t, controlDB, projection.Name()); checkpoint != lastCursor {
+			return fmt.Errorf("checkpoint=%+v want %+v", checkpoint, lastCursor)
 		}
 		batches := observer.Batches()
 		last := batches[len(batches)-1]
 		if last.Error != nil {
 			return fmt.Errorf("last batch still has error: %v", last.Error)
 		}
-		if last.LastPosition != lastPos {
-			return fmt.Errorf("last batch position=%d want %d", last.LastPosition, lastPos)
+		if last.LastPosition != lastCursor.GlobalPosition || last.LastTransactionID != lastCursor.TransactionID {
+			return fmt.Errorf("last batch cursor=(%d,%d) want %+v", last.LastTransactionID, last.LastPosition, lastCursor)
 		}
 		return nil
 	})

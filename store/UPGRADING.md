@@ -1,5 +1,32 @@
 # Upgrading Guide
 
+## Upgrading from `v0.3.0` to `v0.4.0`
+
+`v0.4.0` upgrades global-log reading to use PostgreSQL's MVCC transaction visibility horizon (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`) and composite `(TransactionID, GlobalPosition)` keyset pagination via `store.Cursor`. No SQL schema changes are required beyond the `v0.3.0` `transaction_id xid8` column and `idx_events_transaction_position` index.
+
+### Breaking API Changes
+
+1. **New `store.Cursor` value type**:
+   - Replaces raw `int64` global-position cursors for global log tailing:
+     ```go
+     type Cursor struct {
+         TransactionID  uint64
+         GlobalPosition int64
+     }
+     ```
+   - Exposes `Before(other Cursor) bool` and `IsZero() bool`.
+2. **`EventReader.ReadEvents` signature updated**:
+   - Before (`v0.3.0`): `ReadEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, limit int) ([]PersistedEvent, error)`
+   - After (`v0.4.0`): `ReadEvents(ctx context.Context, tx pgx.Tx, after Cursor, limit int) ([]PersistedEvent, error)`
+   - Queries only committed events whose `transaction_id` precedes `pg_snapshot_xmin(pg_current_snapshot())`, ordered by `(transaction_id ASC, global_position ASC)` after `after`.
+   - Note that `StreamReader.ReadStream` is unchanged and continues reading both committed and intra-transaction uncommitted writes for aggregate reconstruction.
+3. **`GlobalPositionReader` replaced by `HeadReader`**:
+   - Before (`v0.3.0`): `GlobalPositionReader.GetLatestGlobalPosition(ctx context.Context, tx pgx.Tx) (int64, error)`
+   - After (`v0.4.0`): `HeadReader.GetHead(ctx context.Context, tx pgx.Tx) (Cursor, error)`
+   - Returns the highest `store.Cursor` currently settled behind `pg_snapshot_xmin(pg_current_snapshot())` (or zero `store.Cursor` when empty).
+
+---
+
 ## Upgrading from `v0.2.0` to `v0.3.0`
 
 `v0.3.0` moves the module path to the consolidated vanity domain (`eventsalsa.dev/store`), adds a PostgreSQL transaction identifier (`transaction_id xid8`) to the `events` schema and `store.PersistedEvent`, exports `migrations.SQL`, and fixes schema-prefixed index names in generated migrations.

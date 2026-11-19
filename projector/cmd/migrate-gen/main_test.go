@@ -42,13 +42,16 @@ func TestRunGeneratesMigrationWithDefaults(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS projector_instances",
 		"CREATE TABLE IF NOT EXISTS projection_assignments",
 		"CREATE TABLE IF NOT EXISTS projection_checkpoints",
-		"CREATE TABLE IF NOT EXISTS projection_gap_skips",
+		"last_transaction_id xid8 NOT NULL DEFAULT '0'",
 		"CREATE TABLE IF NOT EXISTS projector_leader_leases",
 	}
 	for _, required := range requiredStrings {
 		if !strings.Contains(sql, required) {
 			t.Fatalf("generated SQL missing %q", required)
 		}
+	}
+	if strings.Contains(sql, "projection_gap_skips") {
+		t.Fatal("generated SQL should not contain projection_gap_skips")
 	}
 
 	expectedOutput := "Generated PostgreSQL migration: " + filepath.Join(outputDir, outputFilename) + "\n"
@@ -72,7 +75,6 @@ func TestRunGeneratesMigrationWithOverrides(t *testing.T) {
 		"-projector-instances-table", "infra.projector_instances",
 		"-projection-assignments-table", "infra.projection_assignments",
 		"-projection-checkpoints-table", "infra.projection_checkpoints",
-		"-projection-gap-skips-table", "infra.projection_gap_skips",
 		"-projector-leader-leases-table", "infra.projector_leader_leases",
 	}, &stdout, &stderr)
 	if exitCode != 0 {
@@ -90,7 +92,6 @@ func TestRunGeneratesMigrationWithOverrides(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS infra.projector_instances",
 		"CREATE TABLE IF NOT EXISTS infra.projection_assignments",
 		"CREATE TABLE IF NOT EXISTS infra.projection_checkpoints",
-		"CREATE TABLE IF NOT EXISTS infra.projection_gap_skips",
 		"CREATE TABLE IF NOT EXISTS infra.projector_leader_leases",
 	}
 	for _, required := range requiredStrings {

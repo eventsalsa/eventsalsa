@@ -9,6 +9,14 @@ This page summarizes released versions of the current `eventsalsa` components. I
 
 ## eventsalsa/store
 
+### v0.4.0
+
+- **Breaking Changes**:
+  - Replaced `GlobalPositionReader` (`GetLatestGlobalPosition`) with `HeadReader` (`GetHead(ctx, tx) (Cursor, error)`).
+  - Updated `EventReader.ReadEvents` to accept a composite `store.Cursor` (`TransactionID`, `GlobalPosition`), filtering strictly by PostgreSQL's MVCC visibility horizon (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`) and ordering ascending by `(transaction_id, global_position)`.
+- **Features**:
+  - Added `store.Cursor` (`Before`, `IsZero`) for composite `(TransactionID, GlobalPosition)` log consumption and checkpointing.
+
 ### v0.3.0
 
 - **Breaking Changes**:
@@ -54,6 +62,17 @@ This page summarizes released versions of the current `eventsalsa` components. I
 - Initial release.
 
 ## eventsalsa/projector
+
+### v0.7.0
+
+- **Breaking Changes**:
+  - Replaced sequence-gap / safe-harbor progression and the `projection_gap_skips` table with PostgreSQL MVCC visibility-horizon consumption (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`) and composite `(last_transaction_id, last_position)` checkpoints (`store.Cursor`). Requires `eventsalsa.dev/store` `v0.4.0+`.
+  - Removed `WithStaleGapThreshold`, `WithStaleGapHarborLag`, `WithProjectionGapSkipsTable`, `ProjectionGapSkipsTable` migration settings, `-projection-gap-skips-table`, `Observer.OnGapDetected`, `Observer.OnGapSkipped`, `GapStats`, `BatchStats.StaleSkipped`, `DefaultProjectionGapSkipsTable`, and `dispatcher.PositionQuerier` (replaced by `dispatcher.HeadQuerier`).
+  - Updated `projector/postgres` checkpoint helpers (`GetCheckpoint`, `GetCheckpointForUpdate`, `SaveCheckpoint`) to use `store.Cursor`.
+- **Features**:
+  - Added `StartTransactionID`, `LastTransactionID`, and `HeadTransactionID` to `BatchStats`, and `TargetTransactionID` to `PoisonBatchStats`.
+- **Bug Fixes**:
+  - Allocated a fresh bounded context for leader connection/lease release after forced shutdown drain timeouts so restarted daemons acquire leadership without waiting on expired pool sessions.
 
 ### v0.6.0
 

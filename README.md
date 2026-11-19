@@ -7,7 +7,7 @@ A component-based, PostgreSQL-native stack for event sourcing in Go — hosted a
 | Component | Import Path | Description |
 | :--- | :--- | :--- |
 | **Store** | `eventsalsa.dev/store` | Append-only event store, authoritative `stream_heads` optimistic concurrency, range partitioning, SQL migrations, and `eventmap-gen` |
-| **Projector** | `eventsalsa.dev/projector` | Horizontally scalable async projection daemon with gap-aware frontier tracking, leader election, and telemetry |
+| **Projector** | `eventsalsa.dev/projector` | Horizontally scalable async projection daemon with PostgreSQL MVCC visibility-horizon checkpointing, leader election, and telemetry |
 | **Snapshot** | `eventsalsa.dev/snapshot` | Generic (`[T any]`) stream state snapshotting with pluggable codecs, payload transformers, and schema upcasters |
 | **Encryption** | `eventsalsa.dev/encryption` | KMS-native envelope encryption (`kek/local`, `kek/awskms`, `kek/gcpkms`), AAD scope binding, GDPR crypto-shredding, and blind indexing |
 

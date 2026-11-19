@@ -15,18 +15,18 @@ import (
 // It also performs a slower reconciliation poll so that instances still wake up if
 // LISTEN/NOTIFY is unavailable or notifications are missed.
 type NotifyDispatcher struct {
-	querier PositionQuerier
-	logger  store.Logger
-	db      txBeginner
-	connStr string
-	channel string
-	wakeup  wakeupBroadcaster
-	lastPos int64
-	start   startGuard
+	querier  HeadQuerier
+	logger   store.Logger
+	db       txBeginner
+	connStr  string
+	channel  string
+	wakeup   wakeupBroadcaster
+	lastHead store.Cursor
+	start    startGuard
 }
 
 // NewNotifyDispatcher constructs a LISTEN/NOTIFY-based dispatcher.
-func NewNotifyDispatcher(connStr, channel string, db txBeginner, querier PositionQuerier, logger store.Logger) *NotifyDispatcher {
+func NewNotifyDispatcher(connStr, channel string, db txBeginner, querier HeadQuerier, logger store.Logger) *NotifyDispatcher {
 	return &NotifyDispatcher{
 		connStr: connStr,
 		channel: channel,
@@ -48,16 +48,19 @@ func (d *NotifyDispatcher) Start(ctx context.Context) error {
 		return err
 	}
 
-	position, err := d.latestPosition(ctx)
+	head, err := d.currentHead(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
 		return fmt.Errorf("initialize notify dispatcher checkpoint: %w", err)
 	}
-	d.lastPos = position
+	d.lastHead = head
 
-	d.logger.Debug(ctx, "notify dispatcher started", "channel", d.channel, "last_position", d.lastPos)
+	d.logger.Debug(ctx, "notify dispatcher started",
+		"channel", d.channel,
+		"last_transaction_id", d.lastHead.TransactionID,
+		"last_position", d.lastHead.GlobalPosition)
 
 	notifyCh := make(chan struct{}, 1)
 	if d.connStr != "" {
@@ -104,32 +107,34 @@ func (d *NotifyDispatcher) WakeupChan() <-chan struct{} {
 	return d.wakeup.Channel()
 }
 
-func (d *NotifyDispatcher) latestPosition(ctx context.Context) (int64, error) {
+func (d *NotifyDispatcher) currentHead(ctx context.Context) (store.Cursor, error) {
 	tx, err := d.db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return 0, err
+		return store.Cursor{}, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			d.logger.Error(ctx, "notify dispatcher latest position rollback failed", "error", rollbackErr)
+			d.logger.Error(ctx, "notify dispatcher head rollback failed", "error", rollbackErr)
 		}
 	}()
 
-	return d.querier.GetLatestGlobalPosition(ctx, tx)
+	return d.querier.GetHead(ctx, tx)
 }
 
 func (d *NotifyDispatcher) reconcile(ctx context.Context) error {
-	position, err := d.latestPosition(ctx)
+	head, err := d.currentHead(ctx)
 	if err != nil {
 		return err
 	}
-	if position <= d.lastPos {
+	if !d.lastHead.Before(head) {
 		return nil
 	}
 
-	d.lastPos = position
+	d.lastHead = head
 	d.signalWakeup()
-	d.logger.Debug(ctx, "notify dispatcher detected new events", "last_position", d.lastPos)
+	d.logger.Debug(ctx, "notify dispatcher detected new events",
+		"last_transaction_id", d.lastHead.TransactionID,
+		"last_position", d.lastHead.GlobalPosition)
 
 	return nil
 }

@@ -49,12 +49,6 @@ func TestDefaultConfig(t *testing.T) {
 	if config.ShutdownTimeout != 5*time.Second {
 		t.Fatalf("ShutdownTimeout = %v, want %v", config.ShutdownTimeout, 5*time.Second)
 	}
-	if config.StaleGapThreshold != 30*time.Second {
-		t.Fatalf("StaleGapThreshold = %v, want %v", config.StaleGapThreshold, 30*time.Second)
-	}
-	if config.StaleGapHarborLag != 8 {
-		t.Fatalf("StaleGapHarborLag = %d, want 8", config.StaleGapHarborLag)
-	}
 	if config.MaxConsecutiveFailures != 5 {
 		t.Fatalf("MaxConsecutiveFailures = %d, want 5", config.MaxConsecutiveFailures)
 	}
@@ -66,9 +60,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if config.ProjectionCheckpointsTable != postgres.DefaultProjectionCheckpointsTable {
 		t.Fatalf("ProjectionCheckpointsTable = %q, want %q", config.ProjectionCheckpointsTable, postgres.DefaultProjectionCheckpointsTable)
-	}
-	if config.ProjectionGapSkipsTable != postgres.DefaultProjectionGapSkipsTable {
-		t.Fatalf("ProjectionGapSkipsTable = %q, want %q", config.ProjectionGapSkipsTable, postgres.DefaultProjectionGapSkipsTable)
 	}
 	if config.ProjectorLeaderLeasesTable != postgres.DefaultProjectorLeaderLeasesTable {
 		t.Fatalf("ProjectorLeaderLeasesTable = %q, want %q", config.ProjectorLeaderLeasesTable, postgres.DefaultProjectorLeaderLeasesTable)
@@ -100,12 +91,9 @@ func TestApplyOptionsComposesMultipleOptions(t *testing.T) {
 		WithDetachedApplyTimeout(11*time.Second),
 		WithCheckpointTimeout(3*time.Second),
 		WithShutdownTimeout(12*time.Second),
-		WithStaleGapThreshold(45*time.Second),
-		WithStaleGapHarborLag(5),
 		WithProjectorInstancesTable("custom_instances"),
 		WithProjectionAssignmentsTable("custom_assignments"),
 		WithProjectionCheckpointsTable("custom_checkpoints"),
-		WithProjectionGapSkipsTable("custom_gap_skips"),
 		WithProjectorLeaderLeasesTable("custom_leases"),
 		WithLogger(logger),
 		WithObserver(&recordingObserver{}),
@@ -147,12 +135,6 @@ func TestApplyOptionsComposesMultipleOptions(t *testing.T) {
 	if config.ShutdownTimeout != 12*time.Second {
 		t.Fatalf("ShutdownTimeout = %v, want %v", config.ShutdownTimeout, 12*time.Second)
 	}
-	if config.StaleGapThreshold != 45*time.Second {
-		t.Fatalf("StaleGapThreshold = %v, want %v", config.StaleGapThreshold, 45*time.Second)
-	}
-	if config.StaleGapHarborLag != 5 {
-		t.Fatalf("StaleGapHarborLag = %d, want 5", config.StaleGapHarborLag)
-	}
 	if config.ProjectorInstancesTable != "custom_instances" {
 		t.Fatalf("ProjectorInstancesTable = %q, want %q", config.ProjectorInstancesTable, "custom_instances")
 	}
@@ -161,9 +143,6 @@ func TestApplyOptionsComposesMultipleOptions(t *testing.T) {
 	}
 	if config.ProjectionCheckpointsTable != "custom_checkpoints" {
 		t.Fatalf("ProjectionCheckpointsTable = %q, want %q", config.ProjectionCheckpointsTable, "custom_checkpoints")
-	}
-	if config.ProjectionGapSkipsTable != "custom_gap_skips" {
-		t.Fatalf("ProjectionGapSkipsTable = %q, want %q", config.ProjectionGapSkipsTable, "custom_gap_skips")
 	}
 	if config.ProjectorLeaderLeasesTable != "custom_leases" {
 		t.Fatalf("ProjectorLeaderLeasesTable = %q, want %q", config.ProjectorLeaderLeasesTable, "custom_leases")
@@ -193,12 +172,9 @@ func TestOptionFunctions(t *testing.T) {
 	WithDetachedApplyTimeout(14 * time.Second)(&config)
 	WithCheckpointTimeout(4 * time.Second)(&config)
 	WithShutdownTimeout(8 * time.Second)(&config)
-	WithStaleGapThreshold(45 * time.Second)(&config)
-	WithStaleGapHarborLag(5)(&config)
 	WithProjectorInstancesTable("custom_instances")(&config)
 	WithProjectionAssignmentsTable("custom_assignments")(&config)
 	WithProjectionCheckpointsTable("custom_checkpoints")(&config)
-	WithProjectionGapSkipsTable("custom_gap_skips")(&config)
 	WithProjectorLeaderLeasesTable("custom_leases")(&config)
 	WithLogger(logger)(&config)
 	WithObserver(obs)(&config)
@@ -239,12 +215,6 @@ func TestOptionFunctions(t *testing.T) {
 	if config.ShutdownTimeout != 8*time.Second {
 		t.Fatalf("ShutdownTimeout = %v, want %v", config.ShutdownTimeout, 8*time.Second)
 	}
-	if config.StaleGapThreshold != 45*time.Second {
-		t.Fatalf("StaleGapThreshold = %v, want %v", config.StaleGapThreshold, 45*time.Second)
-	}
-	if config.StaleGapHarborLag != 5 {
-		t.Fatalf("StaleGapHarborLag = %d, want 5", config.StaleGapHarborLag)
-	}
 	if config.ProjectorInstancesTable != "custom_instances" {
 		t.Fatalf("ProjectorInstancesTable = %q, want %q", config.ProjectorInstancesTable, "custom_instances")
 	}
@@ -253,9 +223,6 @@ func TestOptionFunctions(t *testing.T) {
 	}
 	if config.ProjectionCheckpointsTable != "custom_checkpoints" {
 		t.Fatalf("ProjectionCheckpointsTable = %q, want %q", config.ProjectionCheckpointsTable, "custom_checkpoints")
-	}
-	if config.ProjectionGapSkipsTable != "custom_gap_skips" {
-		t.Fatalf("ProjectionGapSkipsTable = %q, want %q", config.ProjectionGapSkipsTable, "custom_gap_skips")
 	}
 	if config.ProjectorLeaderLeasesTable != "custom_leases" {
 		t.Fatalf("ProjectorLeaderLeasesTable = %q, want %q", config.ProjectorLeaderLeasesTable, "custom_leases")
@@ -299,12 +266,9 @@ func TestApplyOptionsNormalizesInvalidValues(t *testing.T) {
 		WithDetachedApplyTimeout(0),
 		WithCheckpointTimeout(0),
 		WithShutdownTimeout(0),
-		WithStaleGapThreshold(0),
-		WithStaleGapHarborLag(-1),
 		WithProjectorInstancesTable(""),
 		WithProjectionAssignmentsTable(""),
 		WithProjectionCheckpointsTable(""),
-		WithProjectionGapSkipsTable(""),
 		WithProjectorLeaderLeasesTable(""),
 		WithLogger(nil),
 		WithObserver(nil),
@@ -351,9 +315,6 @@ func TestApplyOptionsNormalizesInvalidValues(t *testing.T) {
 	if config.ShutdownTimeout != defaults.ShutdownTimeout {
 		t.Fatalf("ShutdownTimeout = %v, want default %v", config.ShutdownTimeout, defaults.ShutdownTimeout)
 	}
-	if config.StaleGapHarborLag != defaults.StaleGapHarborLag {
-		t.Fatalf("StaleGapHarborLag = %d, want default %d", config.StaleGapHarborLag, defaults.StaleGapHarborLag)
-	}
 	if config.ProjectorInstancesTable != defaults.ProjectorInstancesTable {
 		t.Fatalf("ProjectorInstancesTable = %q, want default %q", config.ProjectorInstancesTable, defaults.ProjectorInstancesTable)
 	}
@@ -362,9 +323,6 @@ func TestApplyOptionsNormalizesInvalidValues(t *testing.T) {
 	}
 	if config.ProjectionCheckpointsTable != defaults.ProjectionCheckpointsTable {
 		t.Fatalf("ProjectionCheckpointsTable = %q, want default %q", config.ProjectionCheckpointsTable, defaults.ProjectionCheckpointsTable)
-	}
-	if config.ProjectionGapSkipsTable != defaults.ProjectionGapSkipsTable {
-		t.Fatalf("ProjectionGapSkipsTable = %q, want default %q", config.ProjectionGapSkipsTable, defaults.ProjectionGapSkipsTable)
 	}
 	if config.ProjectorLeaderLeasesTable != defaults.ProjectorLeaderLeasesTable {
 		t.Fatalf("ProjectorLeaderLeasesTable = %q, want default %q", config.ProjectorLeaderLeasesTable, defaults.ProjectorLeaderLeasesTable)
@@ -401,25 +359,6 @@ func TestApplyOptionsDetachedTimeoutsKeepIndependentDefaults(t *testing.T) {
 	}
 	if config.CheckpointTimeout != 750*time.Millisecond {
 		t.Fatalf("CheckpointTimeout = %v, want %v", config.CheckpointTimeout, 750*time.Millisecond)
-	}
-}
-
-func TestApplyOptionsCapsStaleGapHarborLagToBatchWindow(t *testing.T) {
-	config := applyOptions(
-		WithBatchSize(5),
-		WithStaleGapHarborLag(99),
-	)
-
-	if config.StaleGapHarborLag != 4 {
-		t.Fatalf("StaleGapHarborLag = %d, want 4", config.StaleGapHarborLag)
-	}
-}
-
-func TestApplyOptionsAllowsZeroStaleGapHarborLag(t *testing.T) {
-	config := applyOptions(WithStaleGapHarborLag(0))
-
-	if config.StaleGapHarborLag != 0 {
-		t.Fatalf("StaleGapHarborLag = %d, want 0", config.StaleGapHarborLag)
 	}
 }
 

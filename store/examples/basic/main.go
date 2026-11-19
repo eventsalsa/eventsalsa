@@ -199,7 +199,7 @@ func printAllEvents(ctx context.Context, db *pgxpool.Pool, eventStore *postgres.
 		_ = tx.Rollback(ctx)
 	}()
 
-	allEvents, err := eventStore.ReadEvents(ctx, tx, 0, 100)
+	allEvents, err := eventStore.ReadEvents(ctx, tx, store.Cursor{}, 100)
 	if err != nil {
 		return fmt.Errorf("read events: %w", err)
 	}

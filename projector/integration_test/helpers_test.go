@@ -118,13 +118,6 @@ type testProjectionEventRow struct {
 	AttemptNo      int
 }
 
-type gapSkipRow struct {
-	ProjectionName         string
-	GapPosition            int64
-	SkipToPosition         int64
-	HighestVisiblePosition int64
-}
-
 type testProjectorHarness struct {
 	label       string
 	daemon      *projectorpkg.Daemon
@@ -236,7 +229,6 @@ func setupSchema(t testing.TB, db *pgxpool.Pool) {
 	_, err := db.Exec(ctx, `
 DROP TABLE IF EXISTS test_projection_events CASCADE;
 DROP TABLE IF EXISTS projector_leader_leases CASCADE;
-DROP TABLE IF EXISTS projection_gap_skips CASCADE;
 DROP TABLE IF EXISTS projection_checkpoints CASCADE;
 DROP TABLE IF EXISTS projection_assignments CASCADE;
 DROP TABLE IF EXISTS projector_instances CASCADE;
@@ -262,6 +254,7 @@ DROP TABLE IF EXISTS events CASCADE;
 
 	_, err = db.Exec(ctx, `
 CREATE TABLE test_projection_events (
+seq BIGSERIAL NOT NULL,
 projection_name TEXT NOT NULL,
 global_position BIGINT NOT NULL,
 stream_type TEXT NOT NULL,
@@ -288,7 +281,6 @@ func cleanupTables(t testing.TB, db *pgxpool.Pool) {
 TRUNCATE TABLE
 test_projection_events,
 projector_leader_leases,
-projection_gap_skips,
 projection_checkpoints,
 projection_assignments,
 projector_instances,
@@ -729,7 +721,25 @@ func defaultProjectorOptions() []projectorpkg.Option {
 	}
 }
 
-func latestGlobalPosition(t testing.TB, db *pgxpool.Pool, eventStore *storepostgres.Store) int64 {
+func cursorOf(events []store.PersistedEvent) store.Cursor {
+	if len(events) == 0 {
+		return store.Cursor{}
+	}
+	last := events[len(events)-1]
+	return store.Cursor{
+		TransactionID:  last.TransactionID,
+		GlobalPosition: last.GlobalPosition,
+	}
+}
+
+func cursorOfEvent(event store.PersistedEvent) store.Cursor {
+	return store.Cursor{
+		TransactionID:  event.TransactionID,
+		GlobalPosition: event.GlobalPosition,
+	}
+}
+
+func latestHead(t testing.TB, db *pgxpool.Pool, eventStore *storepostgres.Store) store.Cursor {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -737,32 +747,54 @@ func latestGlobalPosition(t testing.TB, db *pgxpool.Pool, eventStore *storepostg
 
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		t.Fatalf("begin latest position tx: %v", err)
+		t.Fatalf("begin latest head tx: %v", err)
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
 
-	position, err := eventStore.GetLatestGlobalPosition(ctx, tx)
+	head, err := eventStore.GetHead(ctx, tx)
 	if err != nil {
-		t.Fatalf("get latest global position: %v", err)
+		t.Fatalf("get settled head: %v", err)
 	}
 
-	return position
+	return head
 }
 
-func getCheckpoint(t testing.TB, db *pgxpool.Pool, projectionName string) int64 {
+func getCheckpoint(t testing.TB, db *pgxpool.Pool, projectionName string) store.Cursor {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	position, err := projectorpostgres.GetCheckpoint(ctx, db, projectorpostgres.DefaultProjectionCheckpointsTable, projectionName)
+	cursor, err := projectorpostgres.GetCheckpoint(ctx, db, projectorpostgres.DefaultProjectionCheckpointsTable, projectionName)
 	if err != nil {
 		t.Fatalf("get checkpoint for %s: %v", projectionName, err)
 	}
 
-	return position
+	return cursor
+}
+
+func seedCheckpoint(t testing.TB, db *pgxpool.Pool, projectionName string, cursor store.Cursor) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin seed checkpoint tx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := projectorpostgres.SaveCheckpoint(ctx, tx, projectorpostgres.DefaultProjectionCheckpointsTable, projectionName, cursor); err != nil {
+		t.Fatalf("seed checkpoint for %s: %v", projectionName, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit seed checkpoint for %s: %v", projectionName, err)
+	}
 }
 
 func getAssignments(t testing.TB, db *pgxpool.Pool) []projectorpostgres.ProjectionAssignment {
@@ -830,41 +862,36 @@ ORDER BY global_position ASC
 	return result
 }
 
-func getGapSkipRows(t testing.TB, db *pgxpool.Pool, projectionName string) []gapSkipRow {
+func getHandledPositionsInOrder(t testing.TB, db *pgxpool.Pool, projectionName string) []int64 {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	rows, err := db.Query(ctx, `
-SELECT projection_name, gap_position, skip_to_position, highest_visible_position
-FROM projection_gap_skips
+SELECT global_position
+FROM test_projection_events
 WHERE projection_name = $1
-ORDER BY id ASC
+ORDER BY seq ASC
 `, projectionName)
 	if err != nil {
-		t.Fatalf("query gap skip rows for %s: %v", projectionName, err)
+		t.Fatalf("query ordered handled positions for %s: %v", projectionName, err)
 	}
 	defer rows.Close()
 
-	result := make([]gapSkipRow, 0)
+	positions := make([]int64, 0)
 	for rows.Next() {
-		var row gapSkipRow
-		if err := rows.Scan(
-			&row.ProjectionName,
-			&row.GapPosition,
-			&row.SkipToPosition,
-			&row.HighestVisiblePosition,
-		); err != nil {
-			t.Fatalf("scan gap skip row for %s: %v", projectionName, err)
+		var pos int64
+		if err := rows.Scan(&pos); err != nil {
+			t.Fatalf("scan handled position for %s: %v", projectionName, err)
 		}
-		result = append(result, row)
+		positions = append(positions, pos)
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate gap skip rows for %s: %v", projectionName, err)
+		t.Fatalf("iterate ordered handled positions for %s: %v", projectionName, err)
 	}
 
-	return result
+	return positions
 }
 
 func handledByAfter(t testing.TB, db *pgxpool.Pool, cutoff int64) []string {
@@ -989,7 +1016,6 @@ func generateProjectorSQL(t testing.TB, outputDir string) []byte {
 		ProjectorInstancesTable:    projectorpostgres.DefaultProjectorInstancesTable,
 		ProjectionAssignmentsTable: projectorpostgres.DefaultProjectionAssignmentsTable,
 		ProjectionCheckpointsTable: projectorpostgres.DefaultProjectionCheckpointsTable,
-		ProjectionGapSkipsTable:    projectorpostgres.DefaultProjectionGapSkipsTable,
 		ProjectorLeaderLeasesTable: projectorpostgres.DefaultProjectorLeaderLeasesTable,
 	}
 	if err := projectormigrations.GeneratePostgres(config); err != nil {

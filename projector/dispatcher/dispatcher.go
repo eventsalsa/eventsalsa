@@ -22,8 +22,8 @@ var (
 	// ErrNilDB indicates that a dispatcher was created without a database handle.
 	ErrNilDB = errors.New("dispatcher requires a database handle")
 
-	// ErrNilQuerier indicates that a dispatcher was created without a position querier.
-	ErrNilQuerier = errors.New("dispatcher requires a position querier")
+	// ErrNilQuerier indicates that a dispatcher was created without a head querier.
+	ErrNilQuerier = errors.New("dispatcher requires a head querier")
 
 	// ErrEmptyChannel indicates that a notify dispatcher was created without a channel name.
 	ErrEmptyChannel = errors.New("dispatcher requires a notification channel")
@@ -51,11 +51,12 @@ type txBeginner interface {
 	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
-// PositionQuerier queries the latest global position from the event store.
-type PositionQuerier interface {
-	// GetLatestGlobalPosition returns the highest global_position currently present in the event log.
-	// Returns 0 when no events exist.
-	GetLatestGlobalPosition(ctx context.Context, tx pgx.Tx) (int64, error)
+// HeadQuerier queries the latest settled event cursor behind PostgreSQL's active
+// transaction visibility horizon.
+type HeadQuerier interface {
+	// GetHead returns the highest (TransactionID, GlobalPosition) cursor visible behind
+	// pg_snapshot_xmin(pg_current_snapshot()), or the zero store.Cursor if none exist.
+	GetHead(ctx context.Context, tx pgx.Tx) (store.Cursor, error)
 }
 
 func normalizedPollInterval(interval time.Duration) time.Duration {

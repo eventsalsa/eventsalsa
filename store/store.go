@@ -47,32 +47,50 @@ type EventStore interface {
 	Append(ctx context.Context, tx pgx.Tx, expectedVersion ExpectedVersion, events []Event) (AppendResult, error)
 }
 
-// EventReader defines the interface for reading events sequentially.
-type EventReader interface {
-	// ReadEvents reads events starting from the given global position.
-	// Returns up to limit events ordered by global_position ascending.
-	//
-	// WARNING: global_position is BIGSERIAL-backed. PostgreSQL sequences guarantee
-	// uniqueness, not commit order. A lower position allocated by a concurrent
-	// transaction may become visible after a higher one has already been returned.
-	// Advancing a checkpoint to the highest seen position without accounting for
-	// in-flight gaps can permanently skip events. Async consumers must use a
-	// gap-aware runtime; do not treat the highest returned position as a safe
-	// checkpoint frontier under concurrent writers.
-	ReadEvents(ctx context.Context, tx pgx.Tx, fromPosition int64, limit int) ([]PersistedEvent, error)
+// Cursor identifies a persisted event's position in (TransactionID, GlobalPosition) order.
+// The zero value starts before any persisted event.
+type Cursor struct {
+	TransactionID  uint64
+	GlobalPosition int64
 }
 
-// GlobalPositionReader defines the interface for reading the latest global event position.
-// This is useful for lightweight "new events available" checks without loading full batches.
-type GlobalPositionReader interface {
-	// GetLatestGlobalPosition returns the highest global_position currently present in the event log.
-	// Returns 0 when no events exist.
+// Before reports whether c strictly precedes other in (TransactionID, GlobalPosition) order.
+func (c Cursor) Before(other Cursor) bool {
+	return c.TransactionID < other.TransactionID ||
+		(c.TransactionID == other.TransactionID && c.GlobalPosition < other.GlobalPosition)
+}
+
+// IsZero reports whether the cursor is unset.
+func (c Cursor) IsZero() bool {
+	return c.TransactionID == 0 && c.GlobalPosition == 0
+}
+
+// EventReader defines the interface for reading events sequentially from the global log
+// behind PostgreSQL's active transaction visibility horizon.
+type EventReader interface {
+	// ReadEvents returns up to limit committed events whose transaction_id precedes
+	// pg_snapshot_xmin(pg_current_snapshot()) and whose (TransactionID, GlobalPosition)
+	// tuple strictly follows after, ordered by (TransactionID ASC, GlobalPosition ASC).
+	// Passing a zero store.Cursor reads from the beginning of the global log.
 	//
-	// WARNING: Because global_position is BIGSERIAL-backed, the returned value is not a safe
-	// checkpoint frontier under concurrent writers. A concurrent transaction holding a lower
-	// position may commit after this call returns, making that position invisible to any
-	// consumer that has already advanced its checkpoint past it.
-	GetLatestGlobalPosition(ctx context.Context, tx pgx.Tx) (int64, error)
+	// WARNING: Direct SQL consumers must NOT tail the events table or persist checkpoints
+	// using raw global_position alone. BIGSERIAL sequences guarantee uniqueness, not
+	// commit order, so a lower global_position from an in-flight concurrent transaction can
+	// commit after a higher one. Always tail using store.Cursor behind pg_snapshot_xmin
+	// (via ReadEvents/GetHead or eventsalsa.dev/projector).
+	ReadEvents(ctx context.Context, tx pgx.Tx, after Cursor, limit int) ([]PersistedEvent, error)
+}
+
+// HeadReader defines the interface for reading the latest event cursor currently
+// settled behind PostgreSQL's active transaction visibility horizon.
+// This is useful for lightweight "new settled events available" checks without loading batches.
+type HeadReader interface {
+	// GetHead returns the highest (TransactionID, GlobalPosition) cursor whose transaction_id
+	// precedes pg_snapshot_xmin(pg_current_snapshot()), or the zero Cursor if none exists.
+	//
+	// WARNING: Direct SQL consumers must NOT use raw MAX(global_position) as a tailing cursor
+	// because PostgreSQL sequence allocation order does not match commit visibility order.
+	GetHead(ctx context.Context, tx pgx.Tx) (Cursor, error)
 }
 
 // StreamReader defines the interface for reading events for a specific stream.
