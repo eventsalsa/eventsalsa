@@ -2,9 +2,12 @@ const GO_IMPORT_CONTENT = 'eventsalsa.dev git https://github.com/eventsalsa/even
 const GO_SOURCE_CONTENT =
 	'eventsalsa.dev https://github.com/eventsalsa/eventsalsa https://github.com/eventsalsa/eventsalsa/tree/main{/dir} https://github.com/eventsalsa/eventsalsa/blob/main{/dir}/{file}#L{line}';
 
-interface PagesContext {
-	request: Request;
-	next: () => Promise<Response>;
+interface AssetsFetcher {
+	fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}
+
+interface Env {
+	ASSETS: AssetsFetcher;
 }
 
 function escapeHtml(value: string): string {
@@ -16,17 +19,16 @@ function escapeHtml(value: string): string {
 		.replace(/'/g, '&#39;');
 }
 
-export async function onRequest(context: PagesContext): Promise<Response> {
-	const { request } = context;
-
-	if (request.method === 'GET' || request.method === 'HEAD') {
-		const url = new URL(request.url);
-		if (url.searchParams.get('go-get') === '1') {
-			const cleanPath = url.pathname.replace(/\/+$/, '');
-			const pkgPath = `eventsalsa.dev${cleanPath}`;
-			const escapedPkg = escapeHtml(pkgPath);
-			const pkgDocUrl = `https://pkg.go.dev/${escapedPkg}`;
-			const body = `<!doctype html>
+export default {
+	async fetch(request: Request, env: Env): Promise<Response> {
+		if (request.method === 'GET' || request.method === 'HEAD') {
+			const url = new URL(request.url);
+			if (url.searchParams.get('go-get') === '1') {
+				const cleanPath = url.pathname.replace(/\/+$/, '');
+				const pkgPath = `eventsalsa.dev${cleanPath}`;
+				const escapedPkg = escapeHtml(pkgPath);
+				const pkgDocUrl = `https://pkg.go.dev/${escapedPkg}`;
+				const body = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -41,15 +43,16 @@ Nothing to see here; <a href="${pkgDocUrl}">see the Go package documentation for
 </html>
 `;
 
-			return new Response(request.method === 'HEAD' ? null : body, {
-				status: 200,
-				headers: {
-					'content-type': 'text/html; charset=utf-8',
-					'cache-control': 'public, max-age=300',
-				},
-			});
+				return new Response(request.method === 'HEAD' ? null : body, {
+					status: 200,
+					headers: {
+						'content-type': 'text/html; charset=utf-8',
+						'cache-control': 'public, max-age=300',
+					},
+				});
+			}
 		}
-	}
 
-	return context.next();
-}
+		return env.ASSETS.fetch(request);
+	},
+};

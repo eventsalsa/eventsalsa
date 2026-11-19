@@ -6,18 +6,19 @@ Website and documentation scaffold for **eventsalsa**, an event sourcing bundle 
 
 - **Astro** for the website surface
 - **Starlight** for documentation in Markdown/MDX
-- **Cloudflare Pages** (with `functions/_middleware.ts` for zero-redirect `?go-get=1` vanity Go import resolution)
+- **Cloudflare Workers** (with `wrangler.jsonc` Static Assets and `worker/index.ts` for zero-redirect `?go-get=1` vanity Go import resolution)
 
 ## Project structure
 
 ```text
 .
-├── functions/                  # Cloudflare Pages middleware (?go-get=1 Go vanity imports)
 ├── public/                     # Static assets
 ├── src/
 │   ├── content/docs/           # Starlight documentation content
 │   ├── layouts/                # Shared Astro layouts for the site
 │   └── pages/                  # Custom website pages & static [...gopkg].astro routes
+├── worker/                     # Cloudflare Worker entrypoint (?go-get=1 + ASSETS fallback)
+└── wrangler.jsonc              # Cloudflare Workers static assets configuration
 ```
 
 ## Commands

@@ -4,7 +4,7 @@
   "include-component-in-tag": true,
   "include-v-in-tag": true,
   "tag-separator": "/",
-  "separate-pull-requests": true,
+  "separate-pull-requests": false,
   "bump-minor-pre-major": true,
   "packages": {
     "store": {
@@ -12,32 +12,9 @@
       "component": "store",
       "changelog-path": "CHANGELOG.md"
     },
-    "snapshot": {
-      "release-type": "go",
-      "component": "snapshot",
-      "versioning": "always-bump-patch",
-      "changelog-path": "CHANGELOG.md"
-    },
-    "projector": {
-      "release-type": "go",
-      "component": "projector",
-      "changelog-path": "CHANGELOG.md"
-    },
     "encryption": {
       "release-type": "go",
       "component": "encryption",
-      "changelog-path": "CHANGELOG.md"
-    },
-    "encryption/kek/awskms": {
-      "release-type": "go",
-      "component": "encryption/kek/awskms",
-      "initial-version": "0.0.1",
-      "changelog-path": "CHANGELOG.md"
-    },
-    "encryption/kek/gcpkms": {
-      "release-type": "go",
-      "component": "encryption/kek/gcpkms",
-      "initial-version": "0.0.1",
       "changelog-path": "CHANGELOG.md"
     }
   }
