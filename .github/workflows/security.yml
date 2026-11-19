@@ -19,8 +19,19 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  changes:
+    name: Detect Changed Modules
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/detect-modules.yml
+    with:
+      target: security
+
   gosec:
-    name: gosec (${{ matrix.module.name }})
+    name: gosec (${{ matrix.module.gosec_name }})
+    needs: changes
+    if: needs.changes.outputs.has_modules == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,28 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module:
-          - name: store
-            dir: store
-            args: ""
-          - name: snapshot
-            dir: snapshot
-            args: ""
-          - name: projector
-            dir: projector
-            args: ""
-          - name: encryption
-            dir: encryption
-            args: -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples
-          - name: encryption-kek-awskms
-            dir: encryption/kek/awskms
-            args: ""
-          - name: encryption-kek-gcpkms
-            dir: encryption/kek/gcpkms
-            args: ""
-          - name: encryption-examples
-            dir: encryption/examples
-            args: ""
+        module: ${{ fromJson(needs.changes.outputs.modules) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -64,14 +54,14 @@ jobs:
         id: run_gosec
         continue-on-error: true
         working-directory: ${{ matrix.module.dir }}
-        run: gosec ${{ matrix.module.args }} -fmt sarif -out gosec-results.sarif ./...
+        run: gosec ${{ matrix.module.gosec_args }} -fmt sarif -out gosec-results.sarif ./...
 
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           sarif_file: ${{ matrix.module.dir }}/gosec-results.sarif
-          category: gosec-${{ matrix.module.name }}
+          category: gosec-${{ matrix.module.gosec_name }}
 
       - name: Enforce gosec status
         if: ${{ steps.run_gosec.outcome == 'failure' }}
@@ -79,6 +69,8 @@ jobs:
 
   govulncheck:
     name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.has_modules == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,14 +83,18 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
+        env:
+          MODULES_JSON: ${{ needs.changes.outputs.modules }}
         run: |
-          for mod in store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples; do
+          for mod in $(printf '%s' "$MODULES_JSON" | jq -r '.[].dir'); do
             echo "==> govulncheck ($mod)"
             govulncheck -C "$mod" ./...
           done
 
   codeql:
     name: CodeQL
+    needs: changes
+    if: needs.changes.outputs.has_modules == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
