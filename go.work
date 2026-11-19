@@ -9,8 +9,3 @@ use (
 	./encryption/kek/gcpkms
 	./encryption/examples
 )
-
-replace (
-	eventsalsa.dev/store v0.3.0 => ./store
-	eventsalsa.dev/encryption v0.1.0 => ./encryption
-)
