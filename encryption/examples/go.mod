@@ -6,7 +6,7 @@ replace eventsalsa.dev/encryption => ../
 
 require (
 	eventsalsa.dev/encryption v0.0.0-00010101000000-000000000000
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 )
