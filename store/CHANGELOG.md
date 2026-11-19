@@ -2,6 +2,17 @@
 
 > **Monorepo Cutover (`v0.3.0`+):** After `v0.2.0`, `store` moved from `github.com/eventsalsa/store` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under the vanity import path `eventsalsa.dev/store`. Historical entries below are preserved from the original repository.
 
+## [0.4.0](https://github.com/eventsalsa/eventsalsa/compare/store/v0.3.0...store/v0.4.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **store,projector:** EventReader.ReadEvents now takes store.Cursor and GlobalPositionReader is replaced by HeadReader; projection_checkpoints requires last_transaction_id (xid8) and gap/frontier options and projection_gap_skips are removed.
+
+### Features
+
+* **store,projector:** replace gap heuristics with MVCC visibility horizon ([#20](https://github.com/eventsalsa/eventsalsa/issues/20)) ([b8e51c0](https://github.com/eventsalsa/eventsalsa/commit/b8e51c02318b882f9bbb0b5500a77a926b6c72ee))
+
 ## [0.3.0](https://github.com/eventsalsa/eventsalsa/compare/store/v0.2.0...store/v0.3.0) (2026-11-19)
 
 
