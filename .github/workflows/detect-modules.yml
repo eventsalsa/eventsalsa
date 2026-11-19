@@ -1,0 +1,127 @@
+name: Detect Changed Modules
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: "Caller workflow identifier ('ci' or 'security')"
+        required: true
+        type: string
+    outputs:
+      root:
+        description: Whether target-relevant root build/workflow files changed
+        value: ${{ jobs.detect.outputs.root }}
+      docs:
+        description: Whether docs/ files changed
+        value: ${{ jobs.detect.outputs.docs }}
+      modules:
+        description: JSON array of affected Go module objects
+        value: ${{ jobs.detect.outputs.modules }}
+      has_modules:
+        description: Whether at least one Go module should run
+        value: ${{ jobs.detect.outputs.has_modules }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect:
+    name: Detect Changed Modules
+    runs-on: ubuntu-latest
+    outputs:
+      root: ${{ steps.matrix.outputs.root }}
+      docs: ${{ steps.filter.outputs.docs }}
+      modules: ${{ steps.matrix.outputs.modules }}
+      has_modules: ${{ steps.matrix.outputs.has_modules }}
+    steps:
+      - name: Filter paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            root_shared:
+              - 'go.work'
+              - 'Makefile'
+              - '.github/workflows/detect-modules.yml'
+            root_ci:
+              - '.golangci.yml'
+              - '.github/workflows/ci.yml'
+            root_security:
+              - '.github/workflows/security.yml'
+            store:
+              - 'store/**'
+            snapshot:
+              - 'snapshot/**'
+            projector:
+              - 'projector/**'
+            encryption:
+              - 'encryption/**'
+              - '!encryption/kek/**'
+              - '!encryption/examples/**'
+            encryption_awskms:
+              - 'encryption/kek/awskms/**'
+            encryption_gcpkms:
+              - 'encryption/kek/gcpkms/**'
+            encryption_examples:
+              - 'encryption/examples/**'
+            docs:
+              - 'docs/**'
+
+      - name: Compute module matrix
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET: ${{ inputs.target }}
+          ROOT_SHARED: ${{ steps.filter.outputs.root_shared }}
+          ROOT_CI: ${{ steps.filter.outputs.root_ci }}
+          ROOT_SECURITY: ${{ steps.filter.outputs.root_security }}
+          STORE_CHANGED: ${{ steps.filter.outputs.store }}
+          SNAPSHOT_CHANGED: ${{ steps.filter.outputs.snapshot }}
+          PROJECTOR_CHANGED: ${{ steps.filter.outputs.projector }}
+          ENCRYPTION_CHANGED: ${{ steps.filter.outputs.encryption }}
+          AWSKMS_CHANGED: ${{ steps.filter.outputs.encryption_awskms }}
+          GCPKMS_CHANGED: ${{ steps.filter.outputs.encryption_gcpkms }}
+          EXAMPLES_CHANGED: ${{ steps.filter.outputs.encryption_examples }}
+        run: |
+          all_modules='[
+            {"key":"store","dir":"store","integration":true,"published":true,"gosec_name":"store","gosec_args":""},
+            {"key":"snapshot","dir":"snapshot","integration":true,"published":true,"gosec_name":"snapshot","gosec_args":""},
+            {"key":"projector","dir":"projector","integration":true,"published":true,"gosec_name":"projector","gosec_args":""},
+            {"key":"encryption","dir":"encryption","integration":true,"published":true,"gosec_name":"encryption","gosec_args":"-exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples"},
+            {"key":"encryption_awskms","dir":"encryption/kek/awskms","integration":false,"published":true,"gosec_name":"encryption-kek-awskms","gosec_args":""},
+            {"key":"encryption_gcpkms","dir":"encryption/kek/gcpkms","integration":false,"published":true,"gosec_name":"encryption-kek-gcpkms","gosec_args":""},
+            {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false,"gosec_name":"encryption-examples","gosec_args":""}
+          ]'
+          root_changed="false"
+          if [ "$EVENT_NAME" != "pull_request" ] || [ "$ROOT_SHARED" = "true" ] || { [ "$TARGET" = "ci" ] && [ "$ROOT_CI" = "true" ]; } || { [ "$TARGET" = "security" ] && [ "$ROOT_SECURITY" = "true" ]; }; then
+            root_changed="true"
+            selected=$(printf '%s' "$all_modules" | jq -c '.')
+          else
+            selected=$(printf '%s' "$all_modules" | jq -c \
+              --arg store "$STORE_CHANGED" \
+              --arg snapshot "$SNAPSHOT_CHANGED" \
+              --arg projector "$PROJECTOR_CHANGED" \
+              --arg encryption "$ENCRYPTION_CHANGED" \
+              --arg encryption_awskms "$AWSKMS_CHANGED" \
+              --arg encryption_gcpkms "$GCPKMS_CHANGED" \
+              --arg encryption_examples "$EXAMPLES_CHANGED" '
+                [ .[] | select(
+                  (.key == "store" and $store == "true") or
+                  (.key == "snapshot" and ($snapshot == "true" or $store == "true")) or
+                  (.key == "projector" and ($projector == "true" or $store == "true")) or
+                  (.key == "encryption" and $encryption == "true") or
+                  (.key == "encryption_awskms" and ($encryption_awskms == "true" or $encryption == "true")) or
+                  (.key == "encryption_gcpkms" and ($encryption_gcpkms == "true" or $encryption == "true")) or
+                  (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true"))
+                ) ]')
+          fi
+          has_modules="false"
+          if [ "$(printf '%s' "$selected" | jq 'length')" -gt 0 ]; then
+            has_modules="true"
+          fi
+          printf 'root=%s\n' "$root_changed" >> "$GITHUB_OUTPUT"
+          printf 'modules=%s\n' "$selected" >> "$GITHUB_OUTPUT"
+          printf 'has_modules=%s\n' "$has_modules" >> "$GITHUB_OUTPUT"
