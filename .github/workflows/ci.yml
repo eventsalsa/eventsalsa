@@ -209,7 +209,7 @@ jobs:
         run: npm ci
 
       - name: Type-check Cloudflare Worker
-        run: ./node_modules/.bin/tsc --noEmit --skipLibCheck --strict --target es2022 --module esnext --lib es2022,dom worker/index.ts
+        run: ./node_modules/.bin/tsc -p tsconfig.worker.json
 
       - name: Build site
         run: npm run build

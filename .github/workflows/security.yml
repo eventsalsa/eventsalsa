@@ -117,10 +117,7 @@ jobs:
           build-mode: manual
 
       - name: Build all modules
-        run: |
-          for mod in store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples; do
-            go build -C "$mod" -a ./...
-          done
+        run: go build ./store/... ./snapshot/... ./projector/... ./encryption/... ./encryption/kek/awskms/... ./encryption/kek/gcpkms/... ./encryption/examples/...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
