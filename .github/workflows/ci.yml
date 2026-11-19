@@ -97,6 +97,10 @@ jobs:
         env:
           GOWORK: "off"
         run: |
+          if ! jq -e --arg dir "${{ matrix.module.dir }}" '.packages[$dir] != null' "${{ github.workspace }}/release-please-config.json" >/dev/null; then
+            echo "Skipping standalone check for ${{ matrix.module.dir }} (not enabled in current release wave)"
+            exit 0
+          fi
           go mod verify
           go build ./...
           go test -race -count=1 ./...
