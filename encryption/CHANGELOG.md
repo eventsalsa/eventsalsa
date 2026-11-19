@@ -2,6 +2,27 @@
 
 > **Monorepo Cutover (`v0.1.0`+):** After `v0.0.6`, `encryption` moved from `github.com/eventsalsa/encryption` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/encryption` (with `kek/awskms` and `kek/gcpkms` tagged starting at `v0.0.1`). Historical entries below are preserved from the original repository.
 
+## [0.1.0](https://github.com/eventsalsa/eventsalsa/compare/encryption/v0.0.6...encryption/v0.1.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **encryption/kek:** Module path moved to eventsalsa.dev/encryption/kek/gcpkms requiring eventsalsa.dev/encryption v0.1.0.
+* **encryption/kek:** Module path moved to eventsalsa.dev/encryption/kek/awskms requiring eventsalsa.dev/encryption v0.1.0.
+* **encryption:** Module path changed from github.com/eventsalsa/encryption to eventsalsa.dev/encryption.
+
+### Features
+
+* **encryption/kek:** initialize awskms submodule at eventsalsa.dev ([fae67a3](https://github.com/eventsalsa/eventsalsa/commit/fae67a303def5022bbded4cddf407e97d329e461))
+* **encryption/kek:** initialize gcpkms submodule at eventsalsa.dev ([d34894e](https://github.com/eventsalsa/eventsalsa/commit/d34894e9d3a869c2c24213b360c4dd3fdfd2cf44))
+* **encryption:** migrate to eventsalsa.dev/encryption and enforce strict lint ([29b0d43](https://github.com/eventsalsa/eventsalsa/commit/29b0d432f8eb2bc436f1037082d1455667a8be49))
+
+
+### Bug Fixes
+
+* **deps:** bump encryption dependencies (pgx v5.13.0, testcontainers v0.45.0) ([#9](https://github.com/eventsalsa/eventsalsa/issues/9)) ([c40928f](https://github.com/eventsalsa/eventsalsa/commit/c40928f42ba1f2f4176f5fd57f2cd4898c7e05ef))
+* **deps:** bump github.com/jackc/pgx/v5 from 5.12.0 to 5.13.0 in /encryption/examples ([#6](https://github.com/eventsalsa/eventsalsa/issues/6)) ([7ff25b5](https://github.com/eventsalsa/eventsalsa/commit/7ff25b5f6cc5c5b26120948bb69923b84060930a))
+
 ## [0.0.6](https://github.com/eventsalsa/encryption/compare/v0.0.5...v0.0.6) (2026-10-15)
 
 
