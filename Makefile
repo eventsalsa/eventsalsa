@@ -83,7 +83,7 @@ vuln: ## Run govulncheck across all Go modules
 
 docs-build: ## Type-check Cloudflare Worker and build Astro documentation site
 	@echo "==> docs type-check & build"
-	(cd docs && ./node_modules/.bin/tsc --noEmit --skipLibCheck --strict --target es2022 --module esnext --lib es2022,dom worker/index.ts)
+	(cd docs && ./node_modules/.bin/tsc -p tsconfig.worker.json)
 	npm --prefix docs run build
 
 check-store: ## Run full Go check suite for store
