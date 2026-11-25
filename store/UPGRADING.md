@@ -1,5 +1,67 @@
 # Upgrading Guide
 
+## Upgrading from `v0.4.0` to `v0.5.0` *(unreleased)*
+
+`v0.5.0` simplifies infrastructure causal metadata to **`TraceID`** and **`CausationID`** (removing `CorrelationID`), adds a partial `trace_id` index (`idx_events_trace`) across all migration strategies, and introduces helper APIs (`ExpectedVersion.Matches`, plus `MarshalEvent` and `FromESEventAs[T]` in `eventmap-gen`) for higher-level command handling.
+
+### Rationale: Two Causal Fields Instead of Three
+
+- **`TraceID`** groups every synchronous and asynchronous hop of an end-to-end execution flow.
+- **`CausationID`** links each event or outbound message directly to its immediate cause (`CommandID`, upstream `EventID`, or inbound `MessageID`).
+- **Saga / business correlation belongs in explicit domain event payloads** (`OrderID`, `TransferID`, `PaymentID`), never in infrastructure metadata. External webhooks, timeouts, or manual retries enter workflows under a new `TraceID`, so routing sagas on domain identifiers keeps business rules decoupled from transport envelopes and eliminates write amplification from the previously unused `idx_events_correlation` index.
+- Custom caller/transport identifiers (such as `X-Request-Id`) belong in JSONB `Metadata`.
+
+### Breaking API & Schema Changes
+
+1. **Removed `CorrelationID` (`events.correlation_id` and `idx_events_correlation`):**
+   - `store.Event.CorrelationID` and `store.PersistedEvent.CorrelationID` have been removed.
+   - Generated migrations in `store/migrations` (`none`, `native`, `partman`) drop `correlation_id TEXT` and replace `idx_<table>_correlation` with the partial index `idx_<table>_trace ON <table> (trace_id) WHERE trace_id IS NOT NULL`.
+   - `cmd/eventmap-gen` no longer emits `WithCorrelationID`.
+2. **Distinct `ErrDuplicateEventID` Sentinel:**
+   - `postgres.Store.Append` now returns `store.ErrDuplicateEventID` when an `event_id` unique constraint violation occurs (previously misclassified as `store.ErrOptimisticConcurrency`).
+3. **Additive Helpers & Behavioral Improvements (Non-Breaking):**
+   - `ExpectedVersion.Matches(currentVersion int64) bool` validates expected versions (`Any`, `NoStream`, `Exact(n)`) against a loaded stream version.
+   - `store.ErrUnknownEvent` is now wrapped by `cmd/eventmap-gen` helpers (`EventTypeOf`, `MarshalEvent`, `ToESEvents`, `FromESEvent`) for unregistered event types, unknown versions, and nil/typed-nil events.
+   - `cmd/eventmap-gen` now emits `MarshalEvent(e any) (eventType string, version int, payload []byte, err error)` and `FromESEventAs[T any](pe store.PersistedEvent) (T, error)`, and resolves colliding domain package names with deterministic import aliases.
+   - `postgres.Store.Append` uses `INSERT ... ON CONFLICT (stream_type, stream_id) DO NOTHING` on `stream_heads` for `store.NoStream()` / `store.Exact(0)` so stream-creation conflicts return `store.ErrOptimisticConcurrency` without aborting the caller's PostgreSQL transaction (`25P02`).
+
+### Zero-Downtime Database Upgrade (`v0.4.0` -> `v0.5.0`)
+
+Because `correlation_id` was nullable and `store` no longer inserts or selects it, `v0.5.0` binaries remain compatible with existing `v0.4.0` tables. Follow this order for zero-downtime rollouts (replace `events` with your schema-qualified table name if customized):
+
+1. **Deploy `v0.5.0` application instances first** so no running code reads or writes `correlation_id`.
+2. **Create `idx_events_trace` online:**
+   - **Unpartitioned `events` table:**
+     ```sql
+     CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_trace
+         ON events (trace_id) WHERE trace_id IS NOT NULL;
+     ```
+   - **Declarative / `pg_partman` partitioned `events` table** (create parent metadata index, build `CONCURRENTLY` per partition, then attach):
+     ```sql
+     CREATE INDEX IF NOT EXISTS idx_events_trace
+         ON ONLY events (trace_id) WHERE trace_id IS NOT NULL;
+
+     -- Repeat per existing child partition outside a transaction block:
+     CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_p0000000001_p0010000000_trace
+         ON events_p0000000001_p0010000000 (trace_id) WHERE trace_id IS NOT NULL;
+
+     ALTER INDEX idx_events_trace
+         ATTACH PARTITION idx_events_p0000000001_p0010000000_trace;
+     ```
+3. **Optionally drop the legacy correlation index and column** once rollbacks to `v0.4.0` are no longer needed:
+   - **Unpartitioned `events` table:**
+     ```sql
+     DROP INDEX CONCURRENTLY IF EXISTS idx_events_correlation;
+     ALTER TABLE events DROP COLUMN IF EXISTS correlation_id;
+     ```
+   - **Declarative / `pg_partman` partitioned `events` table** (`DROP INDEX CONCURRENTLY` is not supported on partitioned parent indexes; run sequentially or drop per-partition indexes first):
+     ```sql
+     DROP INDEX IF EXISTS idx_events_correlation;
+     ALTER TABLE events DROP COLUMN IF EXISTS correlation_id;
+     ```
+
+---
+
 ## Upgrading from `v0.3.0` to `v0.4.0`
 
 `v0.4.0` upgrades global-log reading to use PostgreSQL's MVCC transaction visibility horizon (`transaction_id < pg_snapshot_xmin(pg_current_snapshot())`) and composite `(TransactionID, GlobalPosition)` keyset pagination via `store.Cursor`. No SQL schema changes are required beyond the `v0.3.0` `transaction_id xid8` column and `idx_events_transaction_position` index.

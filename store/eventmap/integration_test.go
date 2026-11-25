@@ -180,7 +180,6 @@ func TestRoundTripV1(t *testing.T) {
 		CausationID:    esEvent.CausationID,
 		Metadata:       esEvent.Metadata,
 		Payload:        esEvent.Payload,
-		CorrelationID:  esEvent.CorrelationID,
 		TraceID:        esEvent.TraceID,
 		GlobalPosition: 1,
 		StreamVersion:  1,
@@ -251,7 +250,6 @@ func TestRoundTripV2(t *testing.T) {
 		CausationID:    esEvent.CausationID,
 		Metadata:       esEvent.Metadata,
 		Payload:        esEvent.Payload,
-		CorrelationID:  esEvent.CorrelationID,
 		TraceID:        esEvent.TraceID,
 		GlobalPosition: 2,
 		StreamVersion:  1,
@@ -359,7 +357,6 @@ func TestIntegrationTypeHelpers(t *testing.T) {
 		CausationID:    esEvent.CausationID,
 		Metadata:       esEvent.Metadata,
 		Payload:        esEvent.Payload,
-		CorrelationID:  esEvent.CorrelationID,
 		TraceID:        esEvent.TraceID,
 		GlobalPosition: 1,
 		StreamVersion:  1,
@@ -388,7 +385,6 @@ func TestIntegrationOptions(t *testing.T) {
 	// Use options to set metadata
 	esEvents, err := ToESEvents("Order", "order-111", []any{domainEvent},
 		WithCausationID("cmd-123"),
-		WithCorrelationID("corr-456"),
 		WithTraceID("trace-789"),
 		WithMetadata([]byte(` + "`" + `{"source":"api"}` + "`" + `)))
 	if err != nil {
@@ -400,11 +396,55 @@ func TestIntegrationOptions(t *testing.T) {
 	if !esEvent.CausationID.Valid || esEvent.CausationID.String != "cmd-123" {
 		t.Errorf("CausationID not set correctly")
 	}
-	if !esEvent.CorrelationID.Valid || esEvent.CorrelationID.String != "corr-456" {
-		t.Errorf("CorrelationID not set correctly")
-	}
 	if !esEvent.TraceID.Valid || esEvent.TraceID.String != "trace-789" {
 		t.Errorf("TraceID not set correctly")
+	}
+}
+
+func TestIntegrationMarshalEventAndFromESEventAs(t *testing.T) {
+	v2Created := v2.OrderCreated{
+		OrderID:    "order-500",
+		CustomerID: "cust-500",
+		Amount:     42.5,
+		Currency:   "EUR",
+		TaxAmount:  7.5,
+	}
+
+	eventType, version, payload, err := MarshalEvent(v2Created)
+	if err != nil {
+		t.Fatalf("MarshalEvent v2 failed: %v", err)
+	}
+	if eventType != "OrderCreated" || version != 2 {
+		t.Fatalf("got (%s, v%d), want (OrderCreated, v2)", eventType, version)
+	}
+
+	pe := store.PersistedEvent{
+		CreatedAt:      time.Now(),
+		StreamType:     "Order",
+		StreamID:       "order-500",
+		EventType:      eventType,
+		EventVersion:   version,
+		Payload:        payload,
+		Metadata:       []byte("{}"),
+		GlobalPosition: 1,
+		StreamVersion:  1,
+		EventID:        uuid.New(),
+	}
+
+	decodedV2, err := FromESEventAs[v2.OrderCreated](pe)
+	if err != nil {
+		t.Fatalf("FromESEventAs[v2.OrderCreated] failed: %v", err)
+	}
+	if decodedV2.OrderID != v2Created.OrderID || decodedV2.Currency != "EUR" {
+		t.Fatalf("decoded mismatch: %+v", decodedV2)
+	}
+
+	if _, err := FromESEventAs[v1.OrderCreated](pe); err == nil {
+		t.Fatal("expected error when decoding v2 event as v1.OrderCreated")
+	}
+
+	if _, _, _, err := MarshalEvent(struct{}{}); err == nil {
+		t.Fatal("expected error for unknown event struct")
 	}
 }
 

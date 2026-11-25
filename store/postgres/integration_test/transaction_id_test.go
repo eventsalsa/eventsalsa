@@ -4,7 +4,9 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -335,7 +337,7 @@ func TestUpgradeSQL_PreV03ToV03(t *testing.T) {
 				event_version INT NOT NULL DEFAULT 1,
 				payload BYTEA NOT NULL,
 				trace_id TEXT,
-				correlation_id TEXT,
+				correlation_id TEXT, -- retained in legacy fixture to verify pre-v0.5.0 zero-downtime compatibility
 				causation_id TEXT,
 				metadata JSONB,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -429,7 +431,7 @@ func TestUpgradeSQL_PreV03ToV03(t *testing.T) {
 				event_version INT NOT NULL DEFAULT 1,
 				payload BYTEA NOT NULL,
 				trace_id TEXT,
-				correlation_id TEXT,
+				correlation_id TEXT, -- retained in legacy fixture to verify pre-v0.5.0 zero-downtime compatibility
 				causation_id TEXT,
 				metadata JSONB,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1144,5 +1146,86 @@ func TestMVCC_UnrelatedTransactions_ReadOnlyVsWriteXID(t *testing.T) {
 	}
 	if len(unblocked) != 1 || unblocked[0].GlobalPosition != res3.GlobalPositions[0] {
 		t.Fatalf("expected e3 unblocked immediately, got %+v", unblocked)
+	}
+}
+
+func TestMVCC_SimpleProtocolVisibilityAndCursorMetadata(t *testing.T) {
+	db := openSimpleProtocolTestDB(t)
+	ctx := context.Background()
+	es := postgres.NewStore(postgres.DefaultStoreConfig())
+
+	// Start in-flight uncommitted transaction holding an older xid before later committed appends.
+	txUncommitted, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin uncommitted: %v", err)
+	}
+	uncommittedID := uuid.New()
+	if _, appendErr := es.Append(ctx, txUncommitted, store.NoStream(), []store.Event{
+		makeSimpleEvent("mvcc-uncommitted", "FirstXID", uncommittedID),
+	}); appendErr != nil {
+		t.Fatalf("append uncommitted: %v", appendErr)
+	}
+
+	// Commit another transaction while txUncommitted remains open.
+	txCommitted, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin committed: %v", err)
+	}
+	committedID := uuid.New()
+	if _, appendErr := es.Append(ctx, txCommitted, store.NoStream(), []store.Event{
+		makeSimpleEvent("mvcc-committed", "SecondXID", committedID),
+	}); appendErr != nil {
+		t.Fatalf("append committed: %v", appendErr)
+	}
+	if commitErr := txCommitted.Commit(ctx); commitErr != nil {
+		t.Fatalf("commit txCommitted: %v", commitErr)
+	}
+
+	// While txUncommitted is still open behind pg_snapshot_xmin, ReadEvents must not skip past it.
+	txRead1, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin read1: %v", err)
+	}
+	beforeCommit, err := es.ReadEvents(ctx, txRead1, store.Cursor{}, 10)
+	if err != nil {
+		t.Fatalf("ReadEvents while open: %v", err)
+	}
+	if rollbackErr := txRead1.Rollback(ctx); rollbackErr != nil {
+		t.Fatalf("rollback read1: %v", rollbackErr)
+	}
+	if len(beforeCommit) != 0 {
+		t.Fatalf("expected 0 visible events while earlier xid in-flight, got %+v", beforeCommit)
+	}
+
+	// Commit txUncommitted and paginate with cursor limit 1 -> preserves order and causal metadata.
+	if commitErr := txUncommitted.Commit(ctx); commitErr != nil {
+		t.Fatalf("commit uncommitted: %v", commitErr)
+	}
+
+	txRead2, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin read2: %v", err)
+	}
+	defer func() {
+		if rbErr := txRead2.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Errorf("rollback read2: %v", rbErr)
+		}
+	}()
+
+	page1, err := es.ReadEvents(ctx, txRead2, store.Cursor{}, 1)
+	if err != nil || len(page1) != 1 {
+		t.Fatalf("page1 = (%d, %v), want 1 event", len(page1), err)
+	}
+	cur1 := store.Cursor{TransactionID: page1[0].TransactionID, GlobalPosition: page1[0].GlobalPosition}
+	page2, err := es.ReadEvents(ctx, txRead2, cur1, 1)
+	if err != nil || len(page2) != 1 {
+		t.Fatalf("page2 = (%d, %v), want 1 event", len(page2), err)
+	}
+	seenIDs := []uuid.UUID{page1[0].EventID, page2[0].EventID}
+	if !slices.Equal(seenIDs, []uuid.UUID{uncommittedID, committedID}) {
+		t.Fatalf("cursor order = %v, want [%s %s]", seenIDs, uncommittedID, committedID)
+	}
+	if page1[0].TraceID.String != "trace-mvcc-uncommitted" || page2[0].CausationID.String != "cause-mvcc-committed" {
+		t.Fatalf("causal metadata lost: p1=%+v p2=%+v", page1[0], page2[0])
 	}
 }

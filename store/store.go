@@ -11,8 +11,14 @@ var (
 	// ErrOptimisticConcurrency indicates a version conflict during append.
 	ErrOptimisticConcurrency = errors.New("optimistic concurrency conflict")
 
+	// ErrDuplicateEventID indicates an append attempted to reuse an existing event_id.
+	ErrDuplicateEventID = errors.New("duplicate event id")
+
 	// ErrNoEvents indicates an attempt to append zero events.
 	ErrNoEvents = errors.New("no events to append")
+
+	// ErrUnknownEvent indicates an unregistered or unsupported event type or schema version.
+	ErrUnknownEvent = errors.New("unknown event")
 )
 
 // EventStore defines the interface for appending events.
@@ -38,6 +44,7 @@ type EventStore interface {
 	// Returns ErrOptimisticConcurrency if expectedVersion validation fails or if
 	// another transaction commits conflicting events between the version check and insert
 	// (detected via unique constraint violation).
+	// Returns ErrDuplicateEventID if an append attempts to reuse an existing event_id.
 	// Returns ErrNoEvents if events slice is empty.
 	//
 	// After a successful append:

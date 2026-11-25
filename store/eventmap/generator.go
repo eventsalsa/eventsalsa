@@ -14,10 +14,16 @@ import (
 	"strings"
 )
 
+var (
+	versionDirRegexp = regexp.MustCompile(`(?:^|/)v(\d+)(?:/|$)`)
+	jsonTagRegexp    = regexp.MustCompile(`json:"([^"]+)"`)
+)
+
 // EventInfo represents a discovered domain event struct.
 type EventInfo struct {
 	Name        string
 	PackageName string
+	ImportAlias string
 	ImportPath  string
 	Fields      []FieldInfo
 	Version     int
@@ -128,8 +134,8 @@ func (g *Generator) Discover() error {
 // extractVersion extracts the version number from the directory path.
 // Returns 1 if no version directory is found or if parsing fails.
 func (g *Generator) extractVersion(path string) int {
-	versionRegex := regexp.MustCompile(`/v(\d+)/`)
-	matches := versionRegex.FindStringSubmatch(path)
+	normalized := filepath.ToSlash(path)
+	matches := versionDirRegexp.FindStringSubmatch(normalized)
 	if len(matches) > 1 {
 		var version int
 		_, err := fmt.Sscanf(matches[1], "%d", &version)
@@ -193,8 +199,7 @@ func (g *Generator) extractFields(structType *ast.StructType) []FieldInfo {
 				tag := field.Tag.Value
 				tag = strings.Trim(tag, "`")
 				if strings.Contains(tag, "json:") {
-					jsonTagRegex := regexp.MustCompile(`json:"([^"]+)"`)
-					matches := jsonTagRegex.FindStringSubmatch(tag)
+					matches := jsonTagRegexp.FindStringSubmatch(tag)
 					if len(matches) > 1 {
 						fieldInfo.JSONTag = strings.Split(matches[1], ",")[0]
 						fieldInfo.Optional = strings.Contains(matches[1], "omitempty")
@@ -298,6 +303,10 @@ func (g *Generator) generateCode() string {
 	sb.WriteString(g.generateEventTypeOf())
 	sb.WriteString("\n\n")
 
+	// MarshalEvent function
+	sb.WriteString(g.generateMarshalEvent())
+	sb.WriteString("\n\n")
+
 	// ToESEvents function
 	sb.WriteString(g.generateToESEvents())
 	sb.WriteString("\n\n")
@@ -319,6 +328,62 @@ func (g *Generator) generateHeader() string {
 package %s`, g.config.PackageName)
 }
 
+// resolveImportAliases returns deterministic unique import aliases per ImportPath and the sorted paths.
+func (g *Generator) resolveImportAliases() (aliases map[string]string, sortedPaths []string) {
+	baseNames := make(map[string]string)
+	for _, event := range g.events {
+		if event.ImportPath != "" {
+			if _, exists := baseNames[event.ImportPath]; !exists {
+				baseNames[event.ImportPath] = event.PackageName
+			}
+		}
+	}
+
+	sortedPaths = make([]string, 0, len(baseNames))
+	for path := range baseNames {
+		sortedPaths = append(sortedPaths, path)
+	}
+	sort.Strings(sortedPaths)
+
+	used := map[string]struct{}{
+		"json":    {},
+		"fmt":     {},
+		"reflect": {},
+		"time":    {},
+		"uuid":    {},
+		"store":   {},
+		"testing": {},
+	}
+	aliases = make(map[string]string, len(sortedPaths))
+	for _, path := range sortedPaths {
+		base := baseNames[path]
+		if base == "" {
+			base = "pkg"
+		}
+		cand := base
+		for n := 2; ; n++ {
+			if _, busy := used[cand]; !busy {
+				break
+			}
+			cand = fmt.Sprintf("%s%d", base, n)
+		}
+		used[cand] = struct{}{}
+		aliases[path] = cand
+	}
+
+	return aliases, sortedPaths
+}
+
+func eventPkgAlias(e *EventInfo, aliases map[string]string) string {
+	if e.ImportAlias != "" {
+		return e.ImportAlias
+	}
+	if a, ok := aliases[e.ImportPath]; ok {
+		return a
+	}
+	return e.PackageName
+}
+
 // generateImports generates the import statements.
 func (g *Generator) generateImports() string {
 	var sb strings.Builder
@@ -326,32 +391,17 @@ func (g *Generator) generateImports() string {
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"encoding/json\"\n")
 	sb.WriteString("\t\"fmt\"\n")
+	sb.WriteString("\t\"reflect\"\n")
 	sb.WriteString("\t\"time\"\n")
 	sb.WriteString("\n")
 	sb.WriteString("\t\"github.com/google/uuid\"\n")
 	sb.WriteString("\t\"eventsalsa.dev/store\"\n")
 
-	// Add imports for domain event packages
-	importPaths := make(map[string]string)
-	for _, event := range g.events {
-		if event.ImportPath != "" {
-			// Use package name as alias
-			importPaths[event.ImportPath] = event.PackageName
-		}
-	}
-
-	if len(importPaths) > 0 {
+	aliases, paths := g.resolveImportAliases()
+	if len(paths) > 0 {
 		sb.WriteString("\n")
-		// Sort import paths for deterministic output
-		paths := make([]string, 0, len(importPaths))
-		for path := range importPaths {
-			paths = append(paths, path)
-		}
-		sort.Strings(paths)
-
 		for _, path := range paths {
-			alias := importPaths[path]
-			fmt.Fprintf(&sb, "\t%s %q\n", alias, path)
+			fmt.Fprintf(&sb, "\t%s %q\n", aliases[path], path)
 		}
 	}
 
@@ -366,23 +416,15 @@ func (g *Generator) generateOptionsType() string {
 type Option func(*eventOptions)
 
 type eventOptions struct {
-	causationID   store.NullString
-	correlationID store.NullString
-	traceID       store.NullString
-	metadata      []byte
+	causationID store.NullString
+	traceID     store.NullString
+	metadata    []byte
 }
 
 // WithCausationID sets the causation ID for the event.
 func WithCausationID(id string) Option {
 	return func(o *eventOptions) {
 		o.causationID = store.NullString{String: id, Valid: true}
-	}
-}
-
-// WithCorrelationID sets the correlation ID for the event.
-func WithCorrelationID(id string) Option {
-	return func(o *eventOptions) {
-		o.correlationID = store.NullString{String: id, Valid: true}
 	}
 }
 
@@ -404,6 +446,7 @@ func WithMetadata(metadata []byte) Option {
 // generateEventTypeOf generates the EventTypeOf function.
 func (g *Generator) generateEventTypeOf() string {
 	var sb strings.Builder
+	aliases, _ := g.resolveImportAliases()
 
 	sb.WriteString(`// EventTypeOf returns the event type string for a given domain event.
 // The event type is the struct name without version information.
@@ -413,22 +456,46 @@ func EventTypeOf(e any) (string, error) {
 
 	// Generate switch cases
 	for _, event := range g.events {
+		alias := eventPkgAlias(&event, aliases)
 		fmt.Fprintf(&sb, "\tcase %s.%s, *%s.%s:\n",
-			event.PackageName, event.Name, event.PackageName, event.Name)
+			alias, event.Name, alias, event.Name)
 		fmt.Fprintf(&sb, "\t\treturn %q, nil\n", event.Name)
 	}
 
 	sb.WriteString(`	default:
-		return "", fmt.Errorf("unknown event type: %T", e)
+		return "", fmt.Errorf("%w: unknown event type %T", store.ErrUnknownEvent, e)
 	}
 }`)
 
 	return sb.String()
 }
 
+// generateMarshalEvent generates the MarshalEvent function.
+func (g *Generator) generateMarshalEvent() string {
+	return `// MarshalEvent serializes a domain event into its event type, schema version, and JSON payload.
+func MarshalEvent(e any) (eventType string, version int, payload []byte, err error) {
+	if rv := reflect.ValueOf(e); !rv.IsValid() || (rv.Kind() == reflect.Pointer && rv.IsNil()) {
+		return "", 0, nil, fmt.Errorf("%w: cannot marshal nil event %T", store.ErrUnknownEvent, e)
+	}
+
+	eventType, err = EventTypeOf(e)
+	if err != nil {
+		return "", 0, nil, err
+	}
+
+	payload, err = json.Marshal(e)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("failed to marshal event %s: %w", eventType, err)
+	}
+
+	return eventType, getEventVersion(e), payload, nil
+}`
+}
+
 // generateToESEvents generates the ToESEvents function.
 func (g *Generator) generateToESEvents() string {
 	var sb strings.Builder
+	aliases, _ := g.resolveImportAliases()
 
 	sb.WriteString(`// ToESEvents converts domain events to store.Event instances.
 // Each domain event is marshaled to JSON and wrapped in a store.Event.
@@ -442,6 +509,10 @@ func ToESEvents[T any](streamType string, streamID string, events []T, opts ...O
 	result := make([]store.Event, 0, len(events))
 
 	for _, e := range events {
+		if rv := reflect.ValueOf(e); !rv.IsValid() || (rv.Kind() == reflect.Pointer && rv.IsNil()) {
+			return nil, fmt.Errorf("%w: cannot marshal nil event %T", store.ErrUnknownEvent, e)
+		}
+
 		eventType, err := EventTypeOf(e)
 		if err != nil {
 			return nil, err
@@ -460,17 +531,16 @@ func ToESEvents[T any](streamType string, streamID string, events []T, opts ...O
 		version := getEventVersion(e)
 
 		event := store.Event{
-			StreamType:    streamType,
-			StreamID:      streamID,
-			EventType:     eventType,
-			EventVersion:  version,
-			EventID:       uuid.New(),
-			Payload:       payload,
-			Metadata:      metadata,
-			CausationID:   options.causationID,
-			CorrelationID: options.correlationID,
-			TraceID:       options.traceID,
-			CreatedAt:     time.Now(),
+			StreamType:   streamType,
+			StreamID:     streamID,
+			EventType:    eventType,
+			EventVersion: version,
+			EventID:      uuid.New(),
+			Payload:      payload,
+			Metadata:     metadata,
+			CausationID:  options.causationID,
+			TraceID:      options.traceID,
+			CreatedAt:    time.Now(),
 		}
 
 		result = append(result, event)
@@ -486,8 +556,9 @@ func getEventVersion(e any) int {
 
 	// Generate version lookup cases
 	for _, event := range g.events {
+		alias := eventPkgAlias(&event, aliases)
 		fmt.Fprintf(&sb, "\tcase %s.%s, *%s.%s:\n",
-			event.PackageName, event.Name, event.PackageName, event.Name)
+			alias, event.Name, alias, event.Name)
 		fmt.Fprintf(&sb, "\t\treturn %d\n", event.Version)
 	}
 
@@ -546,6 +617,8 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 	}
 	sort.Strings(eventTypes)
 
+	aliases, _ := g.resolveImportAliases()
+
 	// Generate switch cases for each event type
 	for _, eventType := range eventTypes {
 		versions := eventsByType[eventType]
@@ -557,8 +630,9 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 		sb.WriteString("\t\tswitch pe.EventVersion {\n")
 
 		for _, event := range versions {
+			alias := eventPkgAlias(&event, aliases)
 			fmt.Fprintf(&sb, "\t\tcase %d:\n", event.Version)
-			fmt.Fprintf(&sb, "\t\t\tvar e %s.%s\n", event.PackageName, event.Name)
+			fmt.Fprintf(&sb, "\t\t\tvar e %s.%s\n", alias, event.Name)
 			sb.WriteString("\t\t\tif err := json.Unmarshal(pe.Payload, &e); err != nil {\n")
 			fmt.Fprintf(&sb, "\t\t\t\treturn nil, fmt.Errorf(\"failed to unmarshal %s v%d: %%w\", err)\n",
 				event.Name, event.Version)
@@ -567,14 +641,36 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 		}
 
 		sb.WriteString("\t\tdefault:\n")
-		fmt.Fprintf(&sb, "\t\t\treturn nil, fmt.Errorf(\"unknown version %%d for event type %s\", pe.EventVersion)\n",
+		fmt.Fprintf(&sb, "\t\t\treturn nil, fmt.Errorf(\"%%w: unknown version %%d for event type %s\", store.ErrUnknownEvent, pe.EventVersion)\n",
 			eventType)
 		sb.WriteString("\t\t}\n")
 	}
 
 	sb.WriteString(`	default:
-		return nil, fmt.Errorf("unknown event type: %s", pe.EventType)
+		return nil, fmt.Errorf("%w: unknown event type %s", store.ErrUnknownEvent, pe.EventType)
 	}
+}
+
+// FromESEventAs converts a persisted event into a domain event of type T.
+// T must be 'any' or an interface/concrete type assignable from the decoded domain event.
+//
+//nolint:gocritic // hugeParam: matches store.PersistedEvent value contract
+func FromESEventAs[T any](pe store.PersistedEvent) (T, error) {
+	var zero T
+	domainEvent, err := FromESEvent(pe)
+	if err != nil {
+		return zero, err
+	}
+
+	typedEvent, ok := domainEvent.(T)
+	if !ok {
+		return zero, fmt.Errorf(
+			"event %s v%d has type %T, want %s",
+			pe.EventType, pe.EventVersion, domainEvent, reflect.TypeFor[T](),
+		)
+	}
+
+	return typedEvent, nil
 }`)
 
 	return sb.String()
@@ -583,8 +679,10 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 // generateTypeHelpers generates type-safe per-event helper functions.
 func (g *Generator) generateTypeHelpers() string {
 	var sb strings.Builder
+	aliases, _ := g.resolveImportAliases()
 
 	for _, event := range g.events {
+		alias := eventPkgAlias(&event, aliases)
 		// ToXXXVN function
 		fmt.Fprintf(&sb, `// To%sV%d converts a domain event to a store.Event.
 func To%sV%d(streamType string, streamID string, e %s.%s, opts ...Option) (store.Event, error) {
@@ -604,23 +702,22 @@ func To%sV%d(streamType string, streamID string, e %s.%s, opts ...Option) (store
 	}
 
 	return store.Event{
-		StreamType:    streamType,
-		StreamID:      streamID,
-		EventType:     %q,
-		EventVersion:  %d,
-		EventID:       uuid.New(),
-		Payload:       payload,
-		Metadata:      metadata,
-		CausationID:   options.causationID,
-		CorrelationID: options.correlationID,
-		TraceID:       options.traceID,
-		CreatedAt:     time.Now(),
+		StreamType:   streamType,
+		StreamID:     streamID,
+		EventType:    %q,
+		EventVersion: %d,
+		EventID:      uuid.New(),
+		Payload:      payload,
+		Metadata:     metadata,
+		CausationID:  options.causationID,
+		TraceID:      options.traceID,
+		CreatedAt:    time.Now(),
 	}, nil
 }
 
 `,
 			event.Name, event.Version,
-			event.Name, event.Version, event.PackageName, event.Name,
+			event.Name, event.Version, alias, event.Name,
 			event.Name,
 			event.Name, event.Version)
 
@@ -645,13 +742,13 @@ func From%sV%d(pe store.PersistedEvent) (%s.%s, error) {
 
 `,
 			event.Name, event.Version,
-			event.Name, event.Version, event.PackageName, event.Name,
+			event.Name, event.Version, alias, event.Name,
 			event.Name,
-			event.PackageName, event.Name, event.Name,
+			alias, event.Name, event.Name,
 			event.Version,
-			event.PackageName, event.Name, event.Version,
-			event.PackageName, event.Name,
-			event.PackageName, event.Name, event.Name, event.Version)
+			alias, event.Name, event.Version,
+			alias, event.Name,
+			alias, event.Name, event.Name, event.Version)
 	}
 
 	return sb.String()
@@ -686,26 +783,11 @@ import (
 	"eventsalsa.dev/store"
 `, g.config.PackageName)
 
-	// Add imports for domain event packages
-	importPaths := make(map[string]string)
-	for _, event := range g.events {
-		if event.ImportPath != "" {
-			importPaths[event.ImportPath] = event.PackageName
-		}
-	}
-
-	if len(importPaths) > 0 {
+	aliases, paths := g.resolveImportAliases()
+	if len(paths) > 0 {
 		sb.WriteString("\n")
-		// Sort import paths for deterministic output
-		paths := make([]string, 0, len(importPaths))
-		for path := range importPaths {
-			paths = append(paths, path)
-		}
-		sort.Strings(paths)
-
 		for _, path := range paths {
-			alias := importPaths[path]
-			fmt.Fprintf(&sb, "\t%s %q\n", alias, path)
+			fmt.Fprintf(&sb, "\t%s %q\n", aliases[path], path)
 		}
 	}
 
@@ -715,12 +797,20 @@ import (
 	sb.WriteString(g.generateTestEventTypeOf())
 	sb.WriteString("\n\n")
 
+	// Test MarshalEvent
+	sb.WriteString(g.generateTestMarshalEvent())
+	sb.WriteString("\n\n")
+
 	// Test ToESEvents with generics
 	sb.WriteString(g.generateTestToESEvents())
 	sb.WriteString("\n\n")
 
 	// Test FromESEvents
 	sb.WriteString(g.generateTestFromESEvents())
+	sb.WriteString("\n\n")
+
+	// Test FromESEventAs
+	sb.WriteString(g.generateTestFromESEventAs())
 	sb.WriteString("\n\n")
 
 	// Test options
@@ -740,6 +830,7 @@ import (
 // generateTestEventTypeOf generates tests for EventTypeOf function.
 func (g *Generator) generateTestEventTypeOf() string {
 	var sb strings.Builder
+	aliases, _ := g.resolveImportAliases()
 
 	sb.WriteString(`// TestEventTypeOf tests the EventTypeOf function.
 func TestEventTypeOf(t *testing.T) {
@@ -753,9 +844,10 @@ func TestEventTypeOf(t *testing.T) {
 
 	// Generate test cases for each event
 	for _, event := range g.events {
+		alias := eventPkgAlias(&event, aliases)
 		sb.WriteString("\t\t{\n")
 		fmt.Fprintf(&sb, "\t\t\tname:      %q,\n", event.Name+"V"+fmt.Sprint(event.Version))
-		fmt.Fprintf(&sb, "\t\t\tevent:     %s.%s{},\n", event.PackageName, event.Name)
+		fmt.Fprintf(&sb, "\t\t\tevent:     %s.%s{},\n", alias, event.Name)
 		fmt.Fprintf(&sb, "\t\t\twantType:  %q,\n", event.Name)
 		sb.WriteString("\t\t\twantError: false,\n")
 		sb.WriteString("\t\t},\n")
@@ -763,7 +855,7 @@ func TestEventTypeOf(t *testing.T) {
 		// Test pointer variant
 		sb.WriteString("\t\t{\n")
 		fmt.Fprintf(&sb, "\t\t\tname:      %q,\n", event.Name+"V"+fmt.Sprint(event.Version)+"Pointer")
-		fmt.Fprintf(&sb, "\t\t\tevent:     &%s.%s{},\n", event.PackageName, event.Name)
+		fmt.Fprintf(&sb, "\t\t\tevent:     &%s.%s{},\n", alias, event.Name)
 		fmt.Fprintf(&sb, "\t\t\twantType:  %q,\n", event.Name)
 		sb.WriteString("\t\t\twantError: false,\n")
 		sb.WriteString("\t\t},\n")
@@ -795,14 +887,101 @@ func TestEventTypeOf(t *testing.T) {
 	return sb.String()
 }
 
+// generateTestMarshalEvent generates tests for MarshalEvent function.
+func (g *Generator) generateTestMarshalEvent() string {
+	if len(g.events) == 0 {
+		return ""
+	}
+
+	aliases, _ := g.resolveImportAliases()
+	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
+
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, `// TestMarshalEvent tests the MarshalEvent function.
+func TestMarshalEvent(t *testing.T) {
+	eventType, version, payload, err := MarshalEvent(%s.%s{})
+	if err != nil {
+		t.Fatalf("MarshalEvent() failed: %%v", err)
+	}
+	if eventType != %q {
+		t.Errorf("EventType = %%s, want %%s", eventType, %q)
+	}
+	if version != %d {
+		t.Errorf("EventVersion = %%d, want %%d", version, %d)
+	}
+	if len(payload) == 0 {
+		t.Error("Payload should not be empty")
+	}
+
+	if _, _, _, err := MarshalEvent(struct{}{}); err == nil {
+		t.Error("Expected error for unknown event type")
+	}
+}`, alias, event.Name, event.Name, event.Name, event.Version, event.Version)
+
+	return sb.String()
+}
+
+// generateTestFromESEventAs generates tests for FromESEventAs function.
+func (g *Generator) generateTestFromESEventAs() string {
+	if len(g.events) == 0 {
+		return ""
+	}
+
+	aliases, _ := g.resolveImportAliases()
+	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
+
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, `// TestFromESEventAs tests the generic FromESEventAs helper function.
+func TestFromESEventAs(t *testing.T) {
+	pe := store.PersistedEvent{
+		CreatedAt:      time.Now(),
+		StreamType:     "TestStream",
+		EventType:      %q,
+		StreamID:       uuid.New().String(),
+		Payload:        []byte("{}"),
+		Metadata:       []byte("{}"),
+		GlobalPosition: 1,
+		StreamVersion:  1,
+		EventVersion:   %d,
+		EventID:        uuid.New(),
+	}
+
+	typed, err := FromESEventAs[%s.%s](pe)
+	if err != nil {
+		t.Fatalf("FromESEventAs concrete type failed: %%v", err)
+	}
+	_ = typed
+
+	anyEvent, err := FromESEventAs[any](pe)
+	if err != nil {
+		t.Fatalf("FromESEventAs[any] failed: %%v", err)
+	}
+	if _, ok := anyEvent.(%s.%s); !ok {
+		t.Errorf("Expected %%T, got %%T", %s.%s{}, anyEvent)
+	}
+
+	type wrongEvent struct{}
+	if _, err := FromESEventAs[wrongEvent](pe); err == nil {
+		t.Error("Expected error when target type mismatches decoded event")
+	}
+}`, event.Name, event.Version, alias, event.Name, alias, event.Name, alias, event.Name)
+
+	return sb.String()
+}
+
 // generateTestToESEvents generates tests for ToESEvents function.
 func (g *Generator) generateTestToESEvents() string {
 	if len(g.events) == 0 {
 		return ""
 	}
 
-	// Pick the first event for testing
+	aliases, _ := g.resolveImportAliases()
 	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
 
 	var sb strings.Builder
 
@@ -847,7 +1026,7 @@ func TestToESEvents(t *testing.T) {
 	if esEvent.CreatedAt.IsZero() {
 		t.Error("CreatedAt should not be zero")
 	}
-}`, event.PackageName, event.Name, event.PackageName, event.Name,
+}`, alias, event.Name, alias, event.Name,
 		event.Name, event.Name, event.Version, event.Version)
 
 	return sb.String()
@@ -859,8 +1038,9 @@ func (g *Generator) generateTestFromESEvents() string {
 		return ""
 	}
 
-	// Pick the first event for testing
+	aliases, _ := g.resolveImportAliases()
 	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
 
 	var sb strings.Builder
 
@@ -895,7 +1075,7 @@ func TestFromESEvents(t *testing.T) {
 	if !ok {
 		t.Errorf("Expected %%T, got %%T", %s.%s{}, domainEvents[0])
 	}
-}`, event.Name, event.Version, event.PackageName, event.Name, event.PackageName, event.Name)
+}`, event.Name, event.Version, alias, event.Name, alias, event.Name)
 
 	return sb.String()
 }
@@ -906,7 +1086,9 @@ func (g *Generator) generateTestOptions() string {
 		return ""
 	}
 
+	aliases, _ := g.resolveImportAliases()
 	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
 
 	var sb strings.Builder
 
@@ -923,7 +1105,6 @@ func TestOptions(t *testing.T) {
 		streamID,
 		[]%s.%s{domainEvent},
 		WithCausationID("causation-123"),
-		WithCorrelationID("correlation-456"),
 		WithTraceID("trace-789"),
 		WithMetadata([]byte("{\"key\":\"value\"}")),
 	)
@@ -941,16 +1122,13 @@ func TestOptions(t *testing.T) {
 	if !esEvent.CausationID.Valid || esEvent.CausationID.String != "causation-123" {
 		t.Errorf("CausationID not set correctly: got %%v", esEvent.CausationID)
 	}
-	if !esEvent.CorrelationID.Valid || esEvent.CorrelationID.String != "correlation-456" {
-		t.Errorf("CorrelationID not set correctly: got %%v", esEvent.CorrelationID)
-	}
 	if !esEvent.TraceID.Valid || esEvent.TraceID.String != "trace-789" {
 		t.Errorf("TraceID not set correctly: got %%v", esEvent.TraceID)
 	}
 	if string(esEvent.Metadata) != "{\"key\":\"value\"}" {
 		t.Errorf("Metadata not set correctly: got %%s", string(esEvent.Metadata))
 	}
-}`, event.PackageName, event.Name, event.PackageName, event.Name)
+}`, alias, event.Name, alias, event.Name)
 
 	return sb.String()
 }
@@ -961,7 +1139,9 @@ func (g *Generator) generateTestTypeHelpers() string {
 		return ""
 	}
 
+	aliases, _ := g.resolveImportAliases()
 	event := g.events[0]
+	alias := eventPkgAlias(&event, aliases)
 
 	var sb strings.Builder
 
@@ -994,7 +1174,6 @@ func TestTypeHelpers(t *testing.T) {
 		Payload:        esEvent.Payload,
 		Metadata:       esEvent.Metadata,
 		CausationID:    esEvent.CausationID,
-		CorrelationID:  esEvent.CorrelationID,
 		TraceID:        esEvent.TraceID,
 		GlobalPosition: 1,
 		StreamVersion:  1,
@@ -1010,7 +1189,7 @@ func TestTypeHelpers(t *testing.T) {
 
 	// Verify type
 	_ = restored // Type assertion happens in function call
-}`, event.PackageName, event.Name,
+}`, alias, event.Name,
 		event.Name, event.Version, event.Name, event.Version,
 		event.Name, event.Name,
 		event.Version, event.Version,

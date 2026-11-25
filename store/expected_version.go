@@ -62,6 +62,18 @@ func (ev ExpectedVersion) Value() int64 {
 	return 0
 }
 
+// Matches reports whether the expected version is satisfied by currentVersion.
+// Any() matches all non-negative versions, NoStream() matches 0, and Exact(n) matches n.
+func (ev ExpectedVersion) Matches(currentVersion int64) bool {
+	if ev.IsAny() {
+		return currentVersion >= 0
+	}
+	if ev.IsNoStream() {
+		return currentVersion == 0
+	}
+	return currentVersion == ev.value
+}
+
 // String returns a string representation of the ExpectedVersion.
 func (ev ExpectedVersion) String() string {
 	if ev.IsAny() {

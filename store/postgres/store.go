@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -112,6 +113,7 @@ func NewStore(config *StoreConfig) *Store {
 // - Any(): atomically increments or creates the stream head returning the reserved version range
 //
 // Returns store.ErrOptimisticConcurrency if expectedVersion validation fails.
+// Returns store.ErrDuplicateEventID if an append attempts to reuse an existing event_id.
 // Returns store.ErrNoEvents if events slice is empty.
 func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.ExpectedVersion, events []store.Event) (store.AppendResult, error) {
 	if len(events) == 0 {
@@ -152,9 +154,9 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 		INSERT INTO %s (
 			stream_type, stream_id, stream_version,
 			event_id, event_type, event_version,
-			payload, trace_id, correlation_id, causation_id,
+			payload, trace_id, causation_id,
 			metadata, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING global_position, transaction_id
 	`, s.config.EventsTable)
 
@@ -180,42 +182,16 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 			event.EventVersion,
 			event.Payload,
 			event.TraceID,
-			event.CorrelationID,
 			event.CausationID,
 			metadata,
 			event.CreatedAt,
 		).Scan(&globalPos, &txID)
 
 		if err != nil {
-			if IsUniqueViolation(err) {
-				if s.config.Logger != nil {
-					s.config.Logger.Error(ctx, "optimistic concurrency conflict",
-						"stream_type", event.StreamType,
-						"stream_id", event.StreamID,
-						"stream_version", streamVersion)
-				}
-				return store.AppendResult{}, store.ErrOptimisticConcurrency
-			}
-			return store.AppendResult{}, fmt.Errorf("failed to insert event %d: %w", i, err)
+			return store.AppendResult{}, s.classifyInsertError(ctx, event, streamVersion, i, err)
 		}
 		globalPositions[i] = globalPos
-
-		persistedEvents[i] = store.PersistedEvent{
-			GlobalPosition: globalPos,
-			TransactionID:  txID,
-			StreamType:     event.StreamType,
-			StreamID:       event.StreamID,
-			StreamVersion:  streamVersion,
-			EventID:        event.EventID,
-			EventType:      event.EventType,
-			EventVersion:   event.EventVersion,
-			Payload:        event.Payload,
-			TraceID:        event.TraceID,
-			CorrelationID:  event.CorrelationID,
-			CausationID:    event.CausationID,
-			Metadata:       event.Metadata,
-			CreatedAt:      event.CreatedAt,
-		}
+		persistedEvents[i] = buildPersistedEvent(event, globalPos, txID, streamVersion)
 	}
 
 	// Send transactional NOTIFY — fires only when the caller commits the TX
@@ -238,6 +214,70 @@ func (s *Store) Append(ctx context.Context, tx pgx.Tx, expectedVersion store.Exp
 	}, nil
 }
 
+func (s *Store) classifyInsertError(
+	ctx context.Context,
+	event *store.Event,
+	streamVersion int64,
+	idx int,
+	err error,
+) error {
+	if isEventIDUniqueViolation(err) {
+		if s.config.Logger != nil {
+			s.config.Logger.Error(ctx, "duplicate event id conflict",
+				"stream_type", event.StreamType,
+				"stream_id", event.StreamID,
+				"event_id", event.EventID)
+		}
+		return store.ErrDuplicateEventID
+	}
+	if IsUniqueViolation(err) {
+		if s.config.Logger != nil {
+			s.config.Logger.Error(ctx, "optimistic concurrency conflict",
+				"stream_type", event.StreamType,
+				"stream_id", event.StreamID,
+				"stream_version", streamVersion)
+		}
+		return store.ErrOptimisticConcurrency
+	}
+	return fmt.Errorf("failed to insert event %d: %w", idx, err)
+}
+
+func buildPersistedEvent(
+	event *store.Event,
+	globalPos int64,
+	txID uint64,
+	streamVersion int64,
+) store.PersistedEvent {
+	traceNS := event.TraceID
+	if !traceNS.Valid {
+		traceNS.String = ""
+	}
+	causNS := event.CausationID
+	if !causNS.Valid {
+		causNS.String = ""
+	}
+	var storedMeta []byte
+	if len(event.Metadata) > 0 {
+		storedMeta = event.Metadata
+	}
+
+	return store.PersistedEvent{
+		GlobalPosition: globalPos,
+		TransactionID:  txID,
+		StreamType:     event.StreamType,
+		StreamID:       event.StreamID,
+		StreamVersion:  streamVersion,
+		EventID:        event.EventID,
+		EventType:      event.EventType,
+		EventVersion:   event.EventVersion,
+		Payload:        event.Payload,
+		TraceID:        traceNS,
+		CausationID:    causNS,
+		Metadata:       storedMeta,
+		CreatedAt:      event.CreatedAt,
+	}
+}
+
 type versionRange struct {
 	firstVersion int64
 	finalVersion int64
@@ -257,20 +297,21 @@ func (s *Store) reserveStreamVersion(
 		query := fmt.Sprintf(`
 			INSERT INTO %s (stream_type, stream_id, stream_version, updated_at)
 			VALUES ($1, $2, $3, NOW())
+			ON CONFLICT (stream_type, stream_id) DO NOTHING
 		`, s.config.StreamHeadsTable)
 
-		_, err := tx.Exec(ctx, query, streamType, streamID, numEvents)
+		tag, err := tx.Exec(ctx, query, streamType, streamID, numEvents)
 		if err != nil {
-			if IsUniqueViolation(err) {
-				if s.config.Logger != nil {
-					s.config.Logger.Error(ctx, "expected version validation failed: stream already exists",
-						"stream_type", streamType,
-						"stream_id", streamID,
-						"expected_version", expectedVersion.String())
-				}
-				return versionRange{}, store.ErrOptimisticConcurrency
-			}
 			return versionRange{}, fmt.Errorf("failed to insert stream head: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			if s.config.Logger != nil {
+				s.config.Logger.Error(ctx, "expected version validation failed: stream already exists",
+					"stream_type", streamType,
+					"stream_id", streamID,
+					"expected_version", expectedVersion.String())
+			}
+			return versionRange{}, store.ErrOptimisticConcurrency
 		}
 
 		return versionRange{
@@ -370,6 +411,14 @@ func IsUniqueViolation(err error) bool {
 	return false
 }
 
+func isEventIDUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == uniqueViolationSQLState && strings.Contains(pgErr.ConstraintName, "event_id")
+	}
+	return false
+}
+
 // ReadEvents implements store.EventReader.
 func (s *Store) ReadEvents(ctx context.Context, tx pgx.Tx, after store.Cursor, limit int) ([]store.PersistedEvent, error) {
 	return s.readEvents(ctx, tx, after, limit)
@@ -377,7 +426,7 @@ func (s *Store) ReadEvents(ctx context.Context, tx pgx.Tx, after store.Cursor, l
 
 const eventSelectColumns = `global_position, transaction_id, stream_type, stream_id, stream_version,
 			event_id, event_type, event_version,
-			payload, trace_id, correlation_id, causation_id,
+			payload, trace_id, causation_id,
 			metadata, created_at`
 
 func scanPersistedEvent(rows pgx.Rows) (store.PersistedEvent, error) {
@@ -393,7 +442,6 @@ func scanPersistedEvent(rows pgx.Rows) (store.PersistedEvent, error) {
 		&e.EventVersion,
 		&e.Payload,
 		&e.TraceID,
-		&e.CorrelationID,
 		&e.CausationID,
 		&e.Metadata,
 		&e.CreatedAt,

@@ -82,6 +82,16 @@ func TestGenerator_ExtractVersion(t *testing.T) {
 			path:     "/some/path/domain/v3/events/event.go",
 			expected: 3,
 		},
+		{
+			name:     "relative top-level version directory",
+			path:     "v2/event.go",
+			expected: 2,
+		},
+		{
+			name:     "filename containing v2 substring without version dir",
+			path:     "events/v2_extra/event.go",
+			expected: 1,
+		},
 	}
 
 	config := Config{}
@@ -133,18 +143,25 @@ func TestGenerator_Generate(t *testing.T) {
 	requiredStrings := []string{
 		"package generated",
 		"func EventTypeOf(e any) (string, error)",
+		"func MarshalEvent(e any) (eventType string, version int, payload []byte, err error)",
 		"func ToESEvents[T any](streamType string, streamID string, events []T, opts ...Option)",
 		"func FromESEvents[T any](events []store.PersistedEvent) ([]T, error)",
+		"func FromESEventAs[T any](pe store.PersistedEvent) (T, error)",
 		"UserRegistered",
 		"UserEmailChanged",
 		"WithCausationID",
-		"WithCorrelationID",
 		"WithTraceID",
 	}
 
 	for _, required := range requiredStrings {
 		if !strings.Contains(generatedCode, required) {
 			t.Errorf("Generated code missing required string: %s", required)
+		}
+	}
+
+	for _, removed := range []string{"WithCorrelationID", "CorrelationID"} {
+		if strings.Contains(generatedCode, removed) {
+			t.Errorf("Generated code should not contain %s (removed)", removed)
 		}
 	}
 
@@ -276,8 +293,26 @@ func sortEvents(events []EventInfo) {
 	}
 }
 
-func TestGenerator_TypeToString(t *testing.T) {
-	// This is tested implicitly through the Discover test,
-	// but we can add explicit tests if needed
-	t.Skip("Tested implicitly through integration tests")
+func TestGenerator_DuplicatePackageAliasesAndUnknownErrorWrapping(t *testing.T) {
+	gen := NewGenerator(&Config{
+		OutputFile:  "event_mapping.gen.go",
+		PackageName: "persistence",
+	})
+	gen.events = []EventInfo{
+		{Name: "Alpha", PackageName: "events", ImportPath: "example.com/domain/a/events", Version: 1},
+		{Name: "Beta", PackageName: "events", ImportPath: "example.com/domain/b/events", Version: 1},
+	}
+
+	code := gen.generateCode()
+	for _, want := range []string{
+		`events "example.com/domain/a/events"`,
+		`events2 "example.com/domain/b/events"`,
+		`store.ErrUnknownEvent`,
+		`reflect.ValueOf(e)`,
+		`reflect.TypeFor[T]()`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("generated code missing %q:\n%s", want, code)
+		}
+	}
 }

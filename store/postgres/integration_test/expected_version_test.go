@@ -4,10 +4,14 @@ package integration_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"eventsalsa.dev/store"
 	"eventsalsa.dev/store/postgres"
@@ -325,4 +329,111 @@ func TestExpectedVersion_UniquenessPattern(t *testing.T) {
 		t.Fatalf("Second email reservation should fail with ErrOptimisticConcurrency, got: %v", err)
 	}
 	tx2.Rollback(ctx)
+}
+
+func TestExpectedVersion_NoStreamConflictKeepsTxUsable(t *testing.T) {
+	db := openSimpleProtocolTestDB(t)
+	ctx := context.Background()
+	es := postgres.NewStore(postgres.DefaultStoreConfig())
+	streamID := "nostream-" + uuid.NewString()
+
+	tx1, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx1: %v", err)
+	}
+	if _, appendErr := es.Append(ctx, tx1, store.NoStream(), []store.Event{
+		makeSimpleEvent(streamID, "Created", uuid.New()),
+	}); appendErr != nil {
+		t.Fatalf("seed NoStream: %v", appendErr)
+	}
+	if commitErr := tx1.Commit(ctx); commitErr != nil {
+		t.Fatalf("commit tx1: %v", commitErr)
+	}
+
+	tx2, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx2: %v", err)
+	}
+	defer func() {
+		if rbErr := tx2.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Errorf("rollback tx2: %v", rbErr)
+		}
+	}()
+
+	_, err = es.Append(ctx, tx2, store.NoStream(), []store.Event{
+		makeSimpleEvent(streamID, "DuplicateCreate", uuid.New()),
+	})
+	if !errors.Is(err, store.ErrOptimisticConcurrency) {
+		t.Fatalf("NoStream conflict err = %v, want ErrOptimisticConcurrency", err)
+	}
+
+	var probe int
+	if qErr := tx2.QueryRow(ctx, "SELECT 1").Scan(&probe); qErr != nil || probe != 1 {
+		t.Fatalf("tx2 poisoned (expected no 25P02) after NoStream conflict: probe=%d err=%v", probe, qErr)
+	}
+}
+
+func TestExpectedVersion_MatchesAndConcurrentAnyAppends(t *testing.T) {
+	if !store.NoStream().Matches(0) || store.NoStream().Matches(1) {
+		t.Fatal("NoStream().Matches broken")
+	}
+	if !store.Exact(3).Matches(3) || store.Exact(3).Matches(2) {
+		t.Fatal("Exact(3).Matches broken")
+	}
+	if !store.Any().Matches(0) || !store.Any().Matches(99) {
+		t.Fatal("Any().Matches broken")
+	}
+
+	db := openSimpleProtocolTestDB(t)
+	ctx := context.Background()
+	es := postgres.NewStore(postgres.DefaultStoreConfig())
+	streamID := "any-occ-" + uuid.NewString()
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := range workers {
+		wg.Go(func() {
+			tx, bErr := db.BeginTx(ctx, nil)
+			if bErr != nil {
+				errs <- bErr
+				return
+			}
+			_, aErr := es.Append(ctx, tx, store.Any(), []store.Event{
+				makeSimpleEvent(streamID, fmt.Sprintf("E%d", i), uuid.New()),
+			})
+			if aErr != nil {
+				if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+					errs <- rbErr
+					return
+				}
+				errs <- aErr
+				return
+			}
+			errs <- tx.Commit(ctx)
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for callErr := range errs {
+		if callErr != nil {
+			t.Fatalf("concurrent Any() append failed: %v", callErr)
+		}
+	}
+
+	txCheck, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin check tx: %v", err)
+	}
+	defer func() {
+		if rbErr := txCheck.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Errorf("rollback check tx: %v", rbErr)
+		}
+	}()
+
+	if _, exactErr := es.Append(ctx, txCheck, store.Exact(workers-1), []store.Event{
+		makeSimpleEvent(streamID, "Stale", uuid.New()),
+	}); !errors.Is(exactErr, store.ErrOptimisticConcurrency) {
+		t.Fatalf("Exact mismatch err = %v, want ErrOptimisticConcurrency", exactErr)
+	}
 }
