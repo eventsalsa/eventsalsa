@@ -124,6 +124,9 @@ jobs:
                   (.key == "cqrs" and $cqrs == "true")
                 ) ]')
           fi
+          if [ "$TARGET" = "security" ]; then
+            selected=$(printf '%s' "$selected" | jq -c '[ .[] | select(.published == true) ]')
+          fi
           has_modules="false"
           if [ "$(printf '%s' "$selected" | jq 'length')" -gt 0 ]; then
             has_modules="true"

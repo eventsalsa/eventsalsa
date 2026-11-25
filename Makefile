@@ -1,4 +1,5 @@
 GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs
+SECURITY_MODULES := $(filter-out encryption/examples,$(GO_MODULES))
 INTEGRATION_MODULES := store snapshot projector encryption cqrs
 
 .PHONY: help check fmt fmt-check vet lint build test test-unit test-integration gosec vuln docs-build \
@@ -63,8 +64,8 @@ test-integration: ## Run testcontainers-go integration tests (requires Docker)
 		go test -C "$$mod" -p 1 -race -count=1 -tags=integration -timeout=300s ./... || exit 1; \
 	done
 
-gosec: ## Run gosec across all Go modules
-	@for mod in $(GO_MODULES); do \
+gosec: ## Run gosec across all published Go modules
+	@for mod in $(SECURITY_MODULES); do \
 		echo "==> gosec ($$mod)"; \
 		tmp=$$(mktemp --suffix=.sarif); \
 		extra=""; \
@@ -75,8 +76,8 @@ gosec: ## Run gosec across all Go modules
 		rm -f "$$tmp"; \
 	done
 
-vuln: ## Run govulncheck across all Go modules
-	@for mod in $(GO_MODULES); do \
+vuln: ## Run govulncheck across all published Go modules
+	@for mod in $(SECURITY_MODULES); do \
 		echo "==> govulncheck ($$mod)"; \
 		govulncheck -C "$$mod" ./... || exit 1; \
 	done

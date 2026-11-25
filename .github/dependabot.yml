@@ -86,18 +86,6 @@ updates:
         patterns:
           - "*"
 
-  - package-ecosystem: "gomod"
-    directory: "/encryption/examples"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "fix(deps)"
-      prefix-development: "fix(deps)"
-    groups:
-      encryption-examples-dependencies:
-        patterns:
-          - "*"
-
   # Astro documentation site npm updates (grouped into a single PR)
   - package-ecosystem: "npm"
     directory: "/docs"
