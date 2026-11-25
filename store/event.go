@@ -46,17 +46,16 @@ func (ns NullString) Value() (driver.Value, error) {
 // Events are value objects without identity until persisted.
 // StreamVersion and GlobalPosition are assigned by the store during Append.
 type Event struct {
-	CreatedAt     time.Time
-	StreamType    string
-	EventType     string
-	StreamID      string
-	Payload       []byte
-	Metadata      []byte
-	CausationID   NullString
-	CorrelationID NullString
-	TraceID       NullString
-	EventVersion  int
-	EventID       uuid.UUID
+	CreatedAt    time.Time
+	StreamType   string
+	EventType    string
+	StreamID     string
+	Payload      []byte
+	Metadata     []byte
+	CausationID  NullString
+	TraceID      NullString
+	EventVersion int
+	EventID      uuid.UUID
 }
 
 // PersistedEvent represents an event that has been stored.
@@ -69,7 +68,6 @@ type PersistedEvent struct {
 	CausationID    NullString
 	Metadata       []byte
 	Payload        []byte
-	CorrelationID  NullString
 	TraceID        NullString
 	GlobalPosition int64
 	StreamVersion  int64

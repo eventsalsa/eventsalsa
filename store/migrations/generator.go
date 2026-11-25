@@ -185,7 +185,6 @@ CREATE TABLE IF NOT EXISTS %s (
     event_version INT NOT NULL DEFAULT 1,
     payload BYTEA NOT NULL,
     trace_id TEXT,
-    correlation_id TEXT,
     causation_id TEXT,
     metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -202,9 +201,9 @@ CREATE INDEX IF NOT EXISTS idx_%s_stream
 CREATE INDEX IF NOT EXISTS idx_%s_event_type 
     ON %s (event_type, global_position);
 
--- Index for correlation tracking
-CREATE INDEX IF NOT EXISTS idx_%s_correlation 
-    ON %s (correlation_id) WHERE correlation_id IS NOT NULL;
+-- Index for distributed trace lookups
+CREATE INDEX IF NOT EXISTS idx_%s_trace 
+    ON %s (trace_id) WHERE trace_id IS NOT NULL;
 
 -- Index for scoped sequential reads (stream_type + global_position)
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
@@ -276,7 +275,6 @@ CREATE TABLE IF NOT EXISTS %s (
     event_version INT NOT NULL DEFAULT 1,
     payload BYTEA NOT NULL,
     trace_id TEXT,
-    correlation_id TEXT,
     causation_id TEXT,
     metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -308,8 +306,8 @@ CREATE INDEX IF NOT EXISTS idx_%s_stream
 CREATE INDEX IF NOT EXISTS idx_%s_event_type 
     ON %s (event_type, global_position);
 
-CREATE INDEX IF NOT EXISTS idx_%s_correlation 
-    ON %s (correlation_id) WHERE correlation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_%s_trace 
+    ON %s (trace_id) WHERE trace_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
     ON %s (stream_type, global_position);
@@ -389,7 +387,6 @@ CREATE TABLE IF NOT EXISTS %s (
     event_version INT NOT NULL DEFAULT 1,
     payload BYTEA NOT NULL,
     trace_id TEXT,
-    correlation_id TEXT,
     causation_id TEXT,
     metadata JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -414,8 +411,8 @@ CREATE INDEX IF NOT EXISTS idx_%s_stream
 CREATE INDEX IF NOT EXISTS idx_%s_event_type 
     ON %s (event_type, global_position);
 
-CREATE INDEX IF NOT EXISTS idx_%s_correlation 
-    ON %s (correlation_id) WHERE correlation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_%s_trace 
+    ON %s (trace_id) WHERE trace_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_%s_stream_type_position 
     ON %s (stream_type, global_position);

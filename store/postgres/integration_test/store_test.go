@@ -9,11 +9,13 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"eventsalsa.dev/store"
 	"eventsalsa.dev/store/postgres"
@@ -1312,3 +1314,116 @@ func TestReadStream_Ordering(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+
+func openSimpleProtocolTestDB(t *testing.T) testDB {
+	t.Helper()
+	t.Setenv("PGX_TEST_QUERY_EXEC_MODE", "simple_protocol")
+	db := getTestDB(t)
+	t.Cleanup(db.Close)
+	setupTestTables(t, db)
+	return db
+}
+
+func makeSimpleEvent(streamID, evType string, id uuid.UUID) store.Event {
+	return store.Event{
+		StreamType:   "TestOrder",
+		StreamID:     streamID,
+		EventID:      id,
+		EventType:    evType,
+		EventVersion: 1,
+		Payload:      []byte(`{"ok":true}`),
+		TraceID:      store.NullString{String: "trace-" + streamID, Valid: true},
+		CausationID:  store.NullString{String: "cause-" + streamID, Valid: true},
+		Metadata:     []byte(`{"src":"integration"}`),
+		CreatedAt:    time.Now().UTC(),
+	}
+}
+
+func TestAppend_DuplicateEventIDReturnsErrDuplicateEventID(t *testing.T) {
+	db := openSimpleProtocolTestDB(t)
+	ctx := context.Background()
+	es := postgres.NewStore(postgres.DefaultStoreConfig())
+	dupID := uuid.New()
+
+	tx1, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx1: %v", err)
+	}
+	if _, appendErr := es.Append(ctx, tx1, store.NoStream(), []store.Event{
+		makeSimpleEvent("dup-a", "Created", dupID),
+	}); appendErr != nil {
+		t.Fatalf("seed event: %v", appendErr)
+	}
+	if commitErr := tx1.Commit(ctx); commitErr != nil {
+		t.Fatalf("commit tx1: %v", commitErr)
+	}
+
+	tx2, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx2: %v", err)
+	}
+	defer func() {
+		if rbErr := tx2.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Errorf("rollback tx2: %v", rbErr)
+		}
+	}()
+
+	_, err = es.Append(ctx, tx2, store.NoStream(), []store.Event{
+		makeSimpleEvent("dup-b", "ReusedID", dupID),
+	})
+	if !errors.Is(err, store.ErrDuplicateEventID) || errors.Is(err, store.ErrOptimisticConcurrency) {
+		t.Fatalf("duplicate event_id err = %v, want ErrDuplicateEventID only", err)
+	}
+}
+
+func TestAppend_ResultNormalizesNullStringsAndEmptyMetadata(t *testing.T) {
+	db := openSimpleProtocolTestDB(t)
+	ctx := context.Background()
+	es := postgres.NewStore(postgres.DefaultStoreConfig())
+	streamID := "norm-" + uuid.NewString()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			t.Errorf("rollback: %v", rbErr)
+		}
+	}()
+
+	ev := store.Event{
+		StreamType:   "TestOrder",
+		StreamID:     streamID,
+		EventID:      uuid.New(),
+		EventType:    "Normalized",
+		EventVersion: 1,
+		Payload:      []byte(`{"k":1}`),
+		Metadata:     []byte{},
+		TraceID:      store.NullString{String: "stale-unvalid", Valid: false},
+		CausationID:  store.NullString{String: "stale-cause", Valid: false},
+		CreatedAt:    time.Now().UTC(),
+	}
+	res, err := es.Append(ctx, tx, store.NoStream(), []store.Event{ev})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	readBack, err := es.ReadStream(ctx, tx, "TestOrder", streamID, nil, nil)
+	if err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+	if len(res.Events) != 1 || len(readBack.Events) != 1 {
+		t.Fatalf("unexpected event counts append=%d read=%d", len(res.Events), len(readBack.Events))
+	}
+
+	gotA, gotR := res.Events[0], readBack.Events[0]
+	if gotA.TraceID != gotR.TraceID || gotA.TraceID.String != "" || gotA.TraceID.Valid {
+		t.Fatalf("TraceID mismatch append=%+v read=%+v", gotA.TraceID, gotR.TraceID)
+	}
+	if gotA.CausationID != gotR.CausationID || gotA.CausationID.String != "" || gotA.CausationID.Valid {
+		t.Fatalf("CausationID mismatch append=%+v read=%+v", gotA.CausationID, gotR.CausationID)
+	}
+	if len(gotA.Metadata) != 0 || len(gotR.Metadata) != 0 {
+		t.Fatalf("Metadata mismatch append=%v read=%v", gotA.Metadata, gotR.Metadata)
+	}
+}

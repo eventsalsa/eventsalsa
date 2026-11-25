@@ -39,18 +39,31 @@ func TestProtocolMode_SimpleProtocolMode(t *testing.T) {
 	pgStore := postgres.NewStore(postgres.DefaultStoreConfig())
 	streamID := uuid.New().String()
 
-	event := store.Event{
-		StreamType:    "SimpleProtocolStream",
-		StreamID:      streamID,
-		EventID:       uuid.New(),
-		EventType:     "TestSimpleProtocol",
-		EventVersion:  1,
-		Payload:       []byte(`{"simple_protocol": true}`),
-		Metadata:      []byte(`{"client": "pgbouncer", "tags": ["prod", "v1"]}`),
-		TraceID:       store.NullString{String: "trace-999", Valid: true},
-		CorrelationID: store.NullString{String: "corr-888", Valid: true},
-		CausationID:   store.NullString{Valid: false}, // NULL
-		CreatedAt:     time.Now(),
+	events := []store.Event{
+		{
+			StreamType:   "SimpleProtocolStream",
+			StreamID:     streamID,
+			EventID:      uuid.New(),
+			EventType:    "TestSimpleProtocol",
+			EventVersion: 1,
+			Payload:      []byte(`{"simple_protocol": true}`),
+			Metadata:     []byte(`{"client": "pgbouncer", "tags": ["prod", "v1"]}`),
+			TraceID:      store.NullString{String: "trace-999", Valid: true},
+			CausationID:  store.NullString{Valid: false}, // NULL
+			CreatedAt:    time.Now(),
+		},
+		{
+			StreamType:   "SimpleProtocolStream",
+			StreamID:     streamID,
+			EventID:      uuid.New(),
+			EventType:    "TestSimpleProtocolCaused",
+			EventVersion: 1,
+			Payload:      []byte(`{"step": 2}`),
+			Metadata:     nil,
+			TraceID:      store.NullString{String: "trace-999", Valid: true},
+			CausationID:  store.NullString{String: "cmd-777", Valid: true},
+			CreatedAt:    time.Now(),
+		},
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -58,7 +71,7 @@ func TestProtocolMode_SimpleProtocolMode(t *testing.T) {
 		t.Fatalf("BeginTx failed: %v", err)
 	}
 
-	appendResult, err := pgStore.Append(ctx, tx, store.NoStream(), []store.Event{event})
+	appendResult, err := pgStore.Append(ctx, tx, store.NoStream(), events)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("Append under simple protocol failed: %v", err)
@@ -68,8 +81,8 @@ func TestProtocolMode_SimpleProtocolMode(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	if appendResult.ToVersion() != 1 {
-		t.Errorf("Expected ToVersion 1, got %d", appendResult.ToVersion())
+	if appendResult.ToVersion() != 2 {
+		t.Errorf("Expected ToVersion 2, got %d", appendResult.ToVersion())
 	}
 
 	// Read stream under simple protocol mode
@@ -84,19 +97,24 @@ func TestProtocolMode_SimpleProtocolMode(t *testing.T) {
 		t.Fatalf("ReadStream failed: %v", err)
 	}
 
-	if len(s.Events) != 1 {
-		t.Fatalf("Expected 1 event, got %d", len(s.Events))
+	if len(s.Events) != 2 {
+		t.Fatalf("Expected 2 events, got %d", len(s.Events))
 	}
 
 	pe := s.Events[0]
 	if pe.TraceID.String != "trace-999" || !pe.TraceID.Valid {
 		t.Errorf("TraceID mismatch: %+v", pe.TraceID)
 	}
-	if pe.CorrelationID.String != "corr-888" || !pe.CorrelationID.Valid {
-		t.Errorf("CorrelationID mismatch: %+v", pe.CorrelationID)
-	}
 	if pe.CausationID.Valid {
 		t.Errorf("CausationID expected Valid=false, got %+v", pe.CausationID)
+	}
+
+	pe2 := s.Events[1]
+	if pe2.TraceID.String != "trace-999" || !pe2.TraceID.Valid {
+		t.Errorf("Event 2 TraceID mismatch: %+v", pe2.TraceID)
+	}
+	if pe2.CausationID.String != "cmd-777" || !pe2.CausationID.Valid {
+		t.Errorf("Event 2 CausationID mismatch: %+v", pe2.CausationID)
 	}
 }
 
