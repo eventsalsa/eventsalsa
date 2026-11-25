@@ -28,13 +28,33 @@ CQRS does **not** require Event Sourcing, asynchronous message brokers, or multi
 
 Write-side commands validate business rules and mutate normalized tables inside transactions; read-side queries execute thin SQL statements or view lookups directly against the same relational database. There is no eventual consistency lag and no extra infrastructure.
 
+<div class="diagram-light">
+
 ![Simple CQRS architecture schematic with separate command and query paths sharing a single database](../../../../assets/diagrams/cqrs-simple.jpg)
+
+</div>
+
+<div class="diagram-dark">
+
+![Simple CQRS architecture schematic with separate command and query paths sharing a single database](../../../../assets/diagrams/cqrs-simple-dark.jpg)
+
+</div>
 
 #### 2. CQRS with Event Sourcing
 
 When an application stores domain history as immutable facts instead of overwriting rows in place, CQRS pairs naturally with an append-only event store on the write side and projections feeding query-friendly read tables. See [CQRS with Event Sourcing](#cqrs-with-event-sourcing) below for how the pieces fit together in `eventsalsa`.
 
+<div class="diagram-light">
+
 ![CQRS with Event Sourcing architecture schematic combining cqrs/command, eventsalsa/store, projections, and cqrs/query](../../../../assets/diagrams/cqrs-event-sourcing.jpg)
+
+</div>
+
+<div class="diagram-dark">
+
+![CQRS with Event Sourcing architecture schematic combining cqrs/command, eventsalsa/store, projections, and cqrs/query](../../../../assets/diagrams/cqrs-event-sourcing-dark.jpg)
+
+</div>
 
 :::note
 **Common misconception: invoking queries inside write workflows**
