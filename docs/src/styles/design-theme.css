@@ -354,6 +354,15 @@ site-search.docs-search button[data-open-modal] svg {
 	box-shadow: var(--shadow-soft);
 }
 
+.sl-markdown img {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	border-radius: 0.75rem;
+	border: 1px solid var(--color-outline-variant);
+	box-shadow: var(--shadow-soft);
+}
+
 .sl-markdown :not(pre) > code {
 	background: var(--color-surface-high);
 	border-radius: 0.5rem;

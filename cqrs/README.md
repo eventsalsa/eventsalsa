@@ -6,13 +6,13 @@
 
 `eventsalsa.dev/cqrs` is a lightweight, transport- and database-free CQRS module for Go 1.27+.
 
-It separates write-side command execution (`eventsalsa.dev/cqrs/command`), read-side query execution (`eventsalsa.dev/cqrs/query`), shared trace/causal context (`eventsalsa.dev/cqrs`), and sub-millisecond in-memory aggregate tests (`eventsalsa.dev/cqrs/spectest`) while relying only on the Go standard library and `github.com/google/uuid`.
+It separates write-side domain commands (`eventsalsa.dev/cqrs/command`) from lightweight presentation and reporting queries (`eventsalsa.dev/cqrs/query`), carries trace and causal context across handlers (`eventsalsa.dev/cqrs`), and provides sub-millisecond domain behavior specs (`eventsalsa.dev/cqrs/spectest`) while relying only on the Go standard library and `github.com/google/uuid`. It works cleanly in standard relational CRUD apps as well as alongside `eventsalsa/store` and `eventsalsa/projector`.
 
-> **Pre-release status:** `eventsalsa.dev/cqrs` is developed in the `0.0.*` pre-release series while its ergonomics stabilize prior to `0.1.0`.
+> **Pre-release status:** `eventsalsa.dev/cqrs` is developed in the `0.0.*` pre-release series while its ergonomics stabilize prior to `v0.1.0`.
 
 ## Features
 
-- **Zero database or broker coupling** — no `pgx`, `store`, `projector`, HTTP router, or message-broker dependencies
+- **Zero database or broker coupling** — no `pgx`, `store`, `projector`, HTTP router, or message-broker dependencies; usable with or without Event Sourcing
 - **Clean command/query split** — separate `command` (`error`) and `query` (`(R, error)`) packages with idiomatic `Bus.Dispatch` and `query.Execute[R]` entrypoints
 - **Direct handlers or optional buses** — wrap individual `command.Handler[C]` or `query.Handler[Q, R]` values with `Wrap`, or route dynamically through `command.Bus` and `query.Bus`
 - **Non-generic middleware pipelines** — write logging, timeouts, metrics, retries, or transactions once over `command.UntypedFunc` / `query.UntypedFunc` without generic boilerplate
@@ -24,15 +24,17 @@ It separates write-side command execution (`eventsalsa.dev/cqrs/command`), read-
 ## Architecture
 
 ```text
-Caller (HTTP, CLI, Worker, Test)
+Caller (UI / API / Worker / Test)
    │
    ├── Write ──▶ command.Bus.Dispatch (or wrapped command.Handler[C])
-   │               └─▶ ObservabilityMiddleware -> RetryMiddleware -> App/Tx -> Handler[C]
+   │               └─▶ ObservabilityMiddleware -> RetryMiddleware -> App/Tx -> Write Model
    │                     └─ boundary policy: maskRejection | StrictOpaque | Passthrough
    │
    └── Read  ──▶ query.Execute[R] (or wrapped query.Handler[Q, R])
-                   └─▶ ObservabilityMiddleware -> Timeout/ReadTx -> Handler[Q, R] (R, error)
+                   └─▶ ObservabilityMiddleware -> Thin Read Handler (SQL / View DTO) (R, error)
 ```
+
+Keep queries lightweight, side-effect-free, and focused on UI/API/reporting reads—avoid invoking `query.Bus` inside write-side domain flows, where handlers should load authoritative write state directly.
 
 ### Package Overview
 
@@ -142,7 +144,7 @@ func runQueries(ctx context.Context) (OrderView, error) {
 
 	query.MustRegister(qBus, query.Func[GetOrder, OrderView](
 		func(ctx context.Context, q GetOrder) (OrderView, error) {
-			return OrderView{OrderID: q.OrderID, Status: "PLACED"}, nil
+			return viewRepo.LoadOrder(ctx, q.OrderID)
 		},
 	))
 
@@ -162,24 +164,31 @@ spec.Given(OrderPlaced{CustomerID: "cust-42"}).
 	Then(OrderConfirmed{})
 ```
 
+## Examples
+
+Runnable samples live in the standalone [`examples/`](./examples/) sub-module:
+
+- **[`examples/simple`](./examples/simple/)** — single-database CQRS without Event Sourcing (zero external dependencies)
+- **[`examples/event-sourcing`](./examples/event-sourcing/)** — CQRS combined with `eventsalsa/store` Event Sourcing, inline projection, and `cqrs/spectest` domain specs
+
 ## Design Choices
 
 - **Asymmetric `command` and `query` packages**: Command pipelines return `error` and deal with retries, rejections, and causation; query pipelines return `(R, error)` with runtime result type verification. Separating the packages removes naming clutter and lets middleware signatures stay idiomatic.
 - **Direct handlers vs. buses**: Not every handler needs dynamic runtime dispatch. `command.Wrap` and `query.Wrap` attach identical `Middleware` chains directly around typed handlers without registering on a `Bus`.
-- **Strict non-nil `context.Context`**: Public APIs follow the Go standard library contract (`ctx != nil`) and fail loudly if `nil` is supplied rather than silently substituting `context.Background()` and dropping caller deadlines or cancellation.
 - **Explicit middleware ordering**: Mount `command.ObservabilityMiddleware` **outside** `command.RetryMiddleware` so retry attempts keep one `CommandID` and `TraceID`, and mount transaction middlewares **inside** `command.RetryMiddleware` so each retry runs in a clean transaction after rollback.
 
 ## Package Layout
 
 ```text
 cqrs/
-├── doc.go                  # Module overview and strict context contract
+├── doc.go                  # Module overview and package guide
 ├── errors.go               # Shared bus/registration sentinels
 ├── observability.go        # Shared Observability context (TraceID, CommandID, CausationID)
 ├── command/                # Handler[C], Bus.Dispatch, Reject, ObservabilityMiddleware, RetryMiddleware
 ├── query/                  # Handler[Q, R], Bus, Execute[R, Q], ObservabilityMiddleware
 ├── spectest/               # Given/When/Then pure domain test harness
 ├── internal/cqrsutil/      # Shared reflection guards, middleware chaining, ID helper
+├── examples/               # Standalone unpublished runnable examples (simple, event-sourcing)
 └── integration_test/       # In-process end-to-end CQRS pipeline integration tests
 ```
 

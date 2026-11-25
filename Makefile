@@ -1,4 +1,5 @@
-GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs
+GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/examples
+SECURITY_MODULES := $(filter-out encryption/examples cqrs/examples,$(GO_MODULES))
 SECURITY_MODULES := $(filter-out encryption/examples,$(GO_MODULES))
 INTEGRATION_MODULES := store snapshot projector encryption cqrs
 

@@ -69,6 +69,9 @@ jobs:
               - 'encryption/examples/**'
             cqrs:
               - 'cqrs/**'
+              - '!cqrs/examples/**'
+            cqrs_examples:
+              - 'cqrs/examples/**'
             docs:
               - 'docs/**'
 
@@ -88,6 +91,7 @@ jobs:
           GCPKMS_CHANGED: ${{ steps.filter.outputs.encryption_gcpkms }}
           EXAMPLES_CHANGED: ${{ steps.filter.outputs.encryption_examples }}
           CQRS_CHANGED: ${{ steps.filter.outputs.cqrs }}
+          CQRS_EXAMPLES_CHANGED: ${{ steps.filter.outputs.cqrs_examples }}
         run: |
           all_modules='[
             {"key":"store","dir":"store","integration":true,"published":true,"gosec_name":"store","gosec_args":""},
@@ -97,7 +101,8 @@ jobs:
             {"key":"encryption_awskms","dir":"encryption/kek/awskms","integration":false,"published":true,"gosec_name":"encryption-kek-awskms","gosec_args":""},
             {"key":"encryption_gcpkms","dir":"encryption/kek/gcpkms","integration":false,"published":true,"gosec_name":"encryption-kek-gcpkms","gosec_args":""},
             {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false,"gosec_name":"encryption-examples","gosec_args":""},
-            {"key":"cqrs","dir":"cqrs","integration":true,"published":true,"gosec_name":"cqrs","gosec_args":""}
+            {"key":"cqrs","dir":"cqrs","integration":true,"published":true,"gosec_name":"cqrs","gosec_args":"-exclude-dir=examples"},
+            {"key":"cqrs_examples","dir":"cqrs/examples","integration":false,"published":false,"gosec_name":"cqrs-examples","gosec_args":""}
           ]'
           root_changed="false"
           if [ "$EVENT_NAME" != "pull_request" ] || [ "$ROOT_SHARED" = "true" ] || { [ "$TARGET" = "ci" ] && [ "$ROOT_CI" = "true" ]; } || { [ "$TARGET" = "security" ] && [ "$ROOT_SECURITY" = "true" ]; }; then
@@ -112,7 +117,8 @@ jobs:
               --arg encryption_awskms "$AWSKMS_CHANGED" \
               --arg encryption_gcpkms "$GCPKMS_CHANGED" \
               --arg encryption_examples "$EXAMPLES_CHANGED" \
-              --arg cqrs "$CQRS_CHANGED" '
+              --arg cqrs "$CQRS_CHANGED" \
+              --arg cqrs_examples "$CQRS_EXAMPLES_CHANGED" '
                 [ .[] | select(
                   (.key == "store" and $store == "true") or
                   (.key == "snapshot" and ($snapshot == "true" or $store == "true")) or
@@ -121,7 +127,8 @@ jobs:
                   (.key == "encryption_awskms" and ($encryption_awskms == "true" or $encryption == "true")) or
                   (.key == "encryption_gcpkms" and ($encryption_gcpkms == "true" or $encryption == "true")) or
                   (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true")) or
-                  (.key == "cqrs" and $cqrs == "true")
+                  (.key == "cqrs" and $cqrs == "true") or
+                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs == "true"))
                 ) ]')
           fi
           if [ "$TARGET" = "security" ]; then

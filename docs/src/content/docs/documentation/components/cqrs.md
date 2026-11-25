@@ -1,15 +1,51 @@
 ---
 title: CQRS
-description: Separate write commands, read queries, observability propagation, retries, and fast domain specs with eventsalsa/cqrs.
+description: Separate write commands from read queries with eventsalsa/cqrs, composable middlewares, causal observability, retries, and fast domain specs.
 ---
 
 `eventsalsa/cqrs` provides lightweight, transport- and database-free building blocks for Command and Query Responsibility Segregation (CQRS) in Go.
 
-In an event-sourced application, write operations validate business rules and persist facts, while read operations return projections shaped for callers. `eventsalsa/cqrs` stays strictly at the application boundary between transports and domain logic: it gives you typed command and query contracts, non-generic middleware pipelines, optional buses with explicit failure semantics, shared causal observability context, retries, and a fast `Given / When / Then` test harness (`cqrs/spectest`).
+It gives your application explicit contracts for write commands and read queries without coupling your code to any SQL driver, ORM, event store, projection daemon, or HTTP framework. Only the Go standard library and `github.com/google/uuid` are required, so `eventsalsa/cqrs` works cleanly in ordinary relational CRUD applications as well as full event-sourced systems.
 
-It has zero dependencies on PostgreSQL, `pgx`, `eventsalsa/store`, `eventsalsa/projector`, or message brokers. Only the Go standard library and `github.com/google/uuid` are required, so you can pair it with the rest of eventsalsa or use it inside any Go service.
+> `eventsalsa.dev/cqrs` is currently in the `0.0.*` pre-release series while its ergonomics stabilize prior to `v0.1.0`.
 
-> `eventsalsa.dev/cqrs` is currently in the `0.0.*` pre-release series while its ergonomics settle before `v0.1.0`.
+## What is CQRS?
+
+CQRS is an architectural pattern that separates **domain logic that moves the system forward** (commands) from **presentation and reporting read operations** (queries).
+
+Traditional CRUD designs force a single data model and repository interface to do both jobs—enforcing invariants safely on writes while returning flattened, joined projections for UI screens, API endpoints, and reports. Over time, read optimizations leak into domain entities and write constraints complicate simple queries.
+
+Splitting commands from queries improves two core architectural quality attributes:
+
+- **Modifiability:** Write handlers stay focused on business rules, invariants, and state transitions, while read handlers adapt freely to UI screens, filters, pagination, and API response shapes without risking domain regressions.
+- **Performance:** Read paths bypass heavy domain object reconstitution, ORMs, and write-side locks. Queries can issue tailored SQL joins or read precomputed views independently of how write state is stored and validated.
+
+CQRS does **not** require Event Sourcing, asynchronous message brokers, or multiple databases. In many services, splitting write handlers from read queries over a single PostgreSQL database gives most of the maintainability and performance gains with immediate read-after-write consistency.
+
+### Flavors of CQRS
+
+#### 1. Simple CQRS (single database)
+
+Write-side commands validate business rules and mutate normalized tables inside transactions; read-side queries execute thin SQL statements or view lookups directly against the same relational database. There is no eventual consistency lag and no extra infrastructure.
+
+![Simple CQRS architecture schematic with separate command and query paths sharing a single database](../../../../assets/diagrams/cqrs-simple.jpg)
+
+#### 2. CQRS with Event Sourcing
+
+When an application stores domain history as immutable facts instead of overwriting rows in place, CQRS pairs naturally with an append-only event store on the write side and projections feeding query-friendly read tables. See [CQRS with Event Sourcing](#cqrs-with-event-sourcing) below for how the pieces fit together in `eventsalsa`.
+
+![CQRS with Event Sourcing architecture schematic combining cqrs/command, eventsalsa/store, projections, and cqrs/query](../../../../assets/diagrams/cqrs-event-sourcing.jpg)
+
+:::note
+**Common misconception: invoking queries inside write workflows**
+
+Developers new to CQRS often inject `query.Bus` or read-side queries directly inside command handlers or application write flows. Doing so defeats the separation:
+
+- Changes made for UI display (formatting, pagination, caching, view filters) can silently alter or break domain decisions.
+- When read models update asynchronously, querying a read table inside a command decides business rules against potentially stale data rather than authoritative transactional state.
+
+Keep `cqrs/query` lightweight, dumb, side-effect-free, and dedicated to serving UIs, APIs, and reports. When a command needs current state to validate a rule, load authoritative write-side state directly from your domain repository or event stream.
+:::
 
 ## Package layout
 
@@ -30,11 +66,11 @@ Add `eventsalsa.dev/cqrs` to your module (`Go 1.27.4+` required):
 go get eventsalsa.dev/cqrs
 ```
 
-No database migrations or background workers are needed for this package.
+No database migrations or background workers are needed for this package. For a minimal non-event-sourced runnable sample, see [`cqrs/examples/simple`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/simple).
 
 ## Commands vs. queries
 
-Commands and queries solve fundamentally different jobs, so `eventsalsa/cqrs` isolates them into separate packages rather than squeezing them into one interface:
+Because commands and queries have distinct contracts and failure models, `eventsalsa/cqrs` places them in separate packages rather than unifying them behind one generic interface:
 
 - **Commands (`cqrs/command`) return only `error`.** Write pipelines focus on authorization, transactional boundaries, conflict retries, causation tracking, and distinguishing domain rejections from unexpected infrastructure failures.
 - **Queries (`cqrs/query`) return `(R, error)`.** Read pipelines focus on timeouts, read-only database transactions, caching, and returning typed projections without write-side retry or rejection machinery.
@@ -62,7 +98,7 @@ type OrderView struct{ OrderID, Status string }
 
 func buildEndpoints(logger *slog.Logger) (command.Handler[PlaceOrder], query.Handler[GetOrder, OrderView], error) {
 	placeOrder := command.Func[PlaceOrder](func(ctx context.Context, cmd PlaceOrder) error {
-		// Validate intent, load stream state, append events.
+		// Validate business rules and persist write-side state.
 		return nil
 	})
 
@@ -89,10 +125,6 @@ func buildEndpoints(logger *slog.Logger) (command.Handler[PlaceOrder], query.Han
 ```
 
 Both `command.Wrap` and `query.Wrap` reject `nil` or typed-nil handlers upfront (`cqrs.ErrNilHandler`) and preserve the typed `Handler` interface for callers.
-
-:::caution
-Pass a valid, non-nil `context.Context` everywhere. Following Go's standard context contract (and matching `eventsalsa/store`, `projector`, and `encryption`), `eventsalsa/cqrs` never invents `context.Background()` when given `nil` — passing `nil` fails loudly rather than silently dropping cancellation signals or request deadlines.
-:::
 
 ## Composable middlewares
 
@@ -144,9 +176,10 @@ bus, err := command.NewBus(
 		}
 		return err
 	}),
-	command.WithOnRejected(func(ctx context.Context, _ any, err error) {
+	command.WithOnRejected(func(ctx context.Context, rejected any, err error) {
 		slog.WarnContext(ctx, "business rule rejected command",
-			"command_id", cqrs.CommandIDFromContext(ctx),
+			"trace_id", cqrs.TraceIDFromContext(ctx),
+			"command", fmt.Sprintf("%T", rejected),
 			"err", err,
 		)
 	}),
@@ -198,7 +231,7 @@ At runtime `query.Execute` checks that the requested `R` matches the type regist
 
 ## Observability and causal propagation
 
-As soon as workflows chain commands together—or trigger downstream handlers through [`eventsalsa/store`](../store/) and [`eventsalsa/projector`](../projector/)—knowing *which request* started a flow (`TraceID`) and *which specific step* caused the next (`CommandID` -> `CausationID`) turns debugging from guesswork into an exact tree.
+As soon as workflows chain commands together—or trigger downstream work across [`eventsalsa/store`](../store/) and [`eventsalsa/projector`](../projector/)—knowing *which request* started a flow (`TraceID`) and *which specific step* caused the next (`CommandID` -> `CausationID`) turns debugging from guesswork into an exact tree.
 
 The root `cqrs` package stores those three strings in `cqrs.Observability` on `context.Context`:
 
@@ -223,7 +256,7 @@ When saving events with [`eventsalsa/store`](../store/), copy `obs.TraceID` into
 
 ## Retries and middleware layering
 
-Transient failures—such as `store.ErrOptimisticConcurrency` during concurrent stream writes—are expected in event-sourced systems. `command.RetryMiddleware` retries failures matching `RetryConfig.RetryIf` using full-jitter exponential backoff up to `MaxAttempts`:
+Transient failures—such as optimistic concurrency conflicts during concurrent writes—are normal under contention. `command.RetryMiddleware` retries failures matching `RetryConfig.RetryIf` using full-jitter exponential backoff up to `MaxAttempts`:
 
 ```go
 handler, err := command.Wrap(
@@ -234,7 +267,7 @@ handler, err := command.Wrap(
 		BaseBackoff: 10 * time.Millisecond,
 		MaxBackoff:  250 * time.Millisecond,
 		RetryIf: func(err error) bool {
-			return errors.Is(err, store.ErrOptimisticConcurrency)
+			return errors.Is(err, errOptimisticConcurrency)
 		},
 	}),
 	txMiddleware,
@@ -250,9 +283,23 @@ Middleware order matters when combining observability, retries, and transactions
 2. Mount database transaction middlewares **inside** `command.RetryMiddleware` so each retry starts a clean transaction after the previous failed attempt rolled back.
 :::
 
+## CQRS with Event Sourcing
+
+While `eventsalsa/cqrs` works with any persistence mechanism, CQRS and Event Sourcing complement each other closely in event-sourced systems:
+
+1. **Command pipeline (`cqrs/command`)**: A command enters `command.Bus` (`ObservabilityMiddleware` -> optional `RetryMiddleware` -> transaction middleware).
+2. **Reconstitution and decision**: Inside the write transaction, your handler reads the aggregate stream from [`eventsalsa/store`](../store/), folds past events (`initial` -> `evolve`) to rebuild decision state, runs `decide` to enforce invariants and produce new events, and appends them atomically using `store.NoStream()` or `store.Exact(version)`. Causal fields from `cqrs.ObservabilityFromContext(ctx)` map cleanly onto `store.Event.TraceID` and `store.Event.CausationID`.
+3. **Projection into read models**: Committed events are projected into query tables either **inline inside the same write transaction** (for immediate read-after-write consistency) or **asynchronously** using [`eventsalsa/projector`](../projector/) (for eventual consistency, retries, and isolated read throughput).
+4. **Query execution (`cqrs/query`)**: Read endpoints execute lightweight queries through `query.Execute` against those projected tables—without replaying event streams on every request or calling back into write-side logic.
+
+Dedicated `cqrs/persistence` adapters will arrive in a follow-up module. Until then, you can browse complete runnable examples showing both flavors in [`cqrs/examples`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples):
+
+- **Non-event-sourced Simple CQRS:** [`cqrs/examples/simple`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/simple)
+- **CQRS with `eventsalsa/store` Event Sourcing & inline projections:** [`cqrs/examples/event-sourcing`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/event-sourcing)
+
 ## Fast domain testing with `cqrs/spectest`
 
-Event-sourced domain models are easiest to test when pure state folding (`initial` + `evolve`) and business decisions (`decide`) do not import SQL or test containers. `eventsalsa.dev/cqrs/spectest` gives you an in-memory `Given / When / Then` test harness built around those exact pure functions:
+Pure domain models are easiest to test when state folding (`initial` + `evolve`) and business decisions (`decide`) do not import SQL or test containers. `eventsalsa.dev/cqrs/spectest` gives you an in-memory `Given / When / Then` test harness built around those exact pure functions:
 
 ```go
 package order_test
@@ -343,4 +390,4 @@ func TestOrderSpecs(t *testing.T) {
 }
 ```
 
-Use `Then(...)` for exact emitted events (`reflect.DeepEqual`), `ThenNoEvents()` for idempotent no-ops, `ThenState(...)` for post-command state checks, and `ThenError()` / `ThenErrorIs(...)` / `ThenErrorCheck(...)` for expected business rejections. Because no PostgreSQL instance is started, entire domain suites finish in sub-millisecond time.
+Use `Then(...)` for exact emitted events (`reflect.DeepEqual`), `ThenNoEvents()` for idempotent no-ops, `ThenState(...)` for post-command state checks, and `ThenError()` / `ThenErrorIs(...)` / `ThenErrorCheck(...)` for expected business rejections. Because no database is started, entire domain suites finish in sub-millisecond time.
