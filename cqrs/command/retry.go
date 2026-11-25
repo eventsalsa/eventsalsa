@@ -1,4 +1,4 @@
-package cqrs
+package command
 
 import (
 	"context"
@@ -11,7 +11,7 @@ const (
 	defaultMaxBackoff  = 250 * time.Millisecond
 )
 
-// RetryConfig configures jittered exponential backoff in RetryCommandMiddleware.
+// RetryConfig configures jittered exponential backoff in RetryMiddleware.
 type RetryConfig struct {
 	// RetryIf decides whether err triggers another attempt. Nil disables retries (fail-safe).
 	RetryIf func(error) bool
@@ -27,14 +27,14 @@ type RetryConfig struct {
 	MaxBackoff time.Duration
 }
 
-// RetryCommandMiddleware wraps command execution with full-jitter exponential backoff retries
+// RetryMiddleware wraps command execution with full-jitter exponential backoff retries
 // whenever cfg.RetryIf returns true. Respects ctx cancellation before attempts and during sleeps.
-func RetryCommandMiddleware(cfg RetryConfig) CommandMiddleware {
+// Callers must pass a non-nil ctx.
+func RetryMiddleware(cfg RetryConfig) Middleware {
 	maxAttempts, retryIf, base, maxBackoff := normalizeRetryParams(cfg)
 
-	return func(next UntypedCommandFunc) UntypedCommandFunc {
+	return func(next UntypedFunc) UntypedFunc {
 		return func(ctx context.Context, cmd any) error {
-			ctx = normalizeContext(ctx)
 			for attempt := 1; attempt <= maxAttempts; attempt++ {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr

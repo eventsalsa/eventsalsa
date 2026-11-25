@@ -1,30 +1,30 @@
-package cqrs_test
+package command_test
 
 import (
 	"errors"
 	"fmt"
 	"testing"
 
-	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
 )
 
 func TestRejectAndIsRejected(t *testing.T) {
 	t.Parallel()
 
-	if cqrs.Reject(nil) != nil {
+	if command.Reject(nil) != nil {
 		t.Fatal("Reject(nil) must return nil")
 	}
-	if cqrs.IsRejected(nil) {
+	if command.IsRejected(nil) {
 		t.Fatal("IsRejected(nil) must return false")
 	}
 
 	baseErr := errors.New("insufficient balance")
-	if cqrs.IsRejected(baseErr) {
+	if command.IsRejected(baseErr) {
 		t.Fatal("plain error must not report IsRejected")
 	}
 
-	rej := cqrs.Reject(baseErr)
-	if !cqrs.IsRejected(rej) {
+	rej := command.Reject(baseErr)
+	if !command.IsRejected(rej) {
 		t.Fatal("Reject(baseErr) must report IsRejected")
 	}
 	if !errors.Is(rej, baseErr) {
@@ -35,8 +35,8 @@ func TestRejectAndIsRejected(t *testing.T) {
 	}
 
 	// Idempotent double-wrapping preserves exact wrapper without stacking.
-	double := cqrs.Reject(rej)
-	if !cqrs.IsRejected(double) || !errors.Is(double, baseErr) {
+	double := command.Reject(rej)
+	if !command.IsRejected(double) || !errors.Is(double, baseErr) {
 		t.Fatalf("double Reject failed: %v", double)
 	}
 	if fmt.Sprintf("%p", double) != fmt.Sprintf("%p", rej) {
@@ -45,11 +45,11 @@ func TestRejectAndIsRejected(t *testing.T) {
 
 	// Nested wrapped or joined rejection remains detectable.
 	wrapped := fmt.Errorf("reserve room: %w", rej)
-	if !cqrs.IsRejected(wrapped) {
+	if !command.IsRejected(wrapped) {
 		t.Fatal("wrapped rejection must still report IsRejected")
 	}
 	joined := errors.Join(errors.New("other"), rej)
-	if !cqrs.IsRejected(joined) {
+	if !command.IsRejected(joined) {
 		t.Fatal("joined error containing Reject must report IsRejected")
 	}
 }

@@ -15,7 +15,7 @@ This document defines the architecture, conventions, cross-module development wo
 | `encryption/kek/awskms/` | `eventsalsa.dev/encryption/kek/awskms` — AWS KMS KEK `Wrapper` / `Rewrapper` | `encryption/kek/awskms` |
 | `encryption/kek/gcpkms/` | `eventsalsa.dev/encryption/kek/gcpkms` — Google Cloud KMS KEK `Wrapper` | `encryption/kek/gcpkms` |
 | `encryption/examples/` | `eventsalsa.dev/encryption/examples` — Internal runnable examples (non-published) | *(excluded)* |
-| `cqrs/` | `eventsalsa.dev/cqrs` — Transport-free command/query handlers, middlewares, `CommandBus`/`QueryBus`, causation, retry, and `spectest` | `cqrs` |
+| `cqrs/` | `eventsalsa.dev/cqrs` — Transport-free `cqrs/command` (`Bus.Dispatch`), `cqrs/query` (`Execute`), `ObservabilityMiddleware`, retry, and `spectest` | `cqrs` |
 | `docs/` | Astro + Starlight site deployed to `https://eventsalsa.dev` via Cloudflare Workers (`?go-get=1` handler in `docs/worker/index.ts`) | *(excluded)* |
 
 Module-specific guidelines and historical plans remain inside `<component>/AGENTS.md` and `<component>/.agents/`.

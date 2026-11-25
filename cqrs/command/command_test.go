@@ -1,4 +1,4 @@
-package cqrs_test
+package command_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
 )
 
 type testCreateCmd struct {
@@ -23,24 +24,24 @@ func (h *typedNilHandler) Handle(_ context.Context, _ testCreateCmd) error {
 	return nil
 }
 
-func TestWrapCommandAndNilGuards(t *testing.T) {
+func TestWrapAndNilGuards(t *testing.T) {
 	t.Parallel()
 
-	if _, err := cqrs.WrapCommand[testCreateCmd](nil); !errors.Is(err, cqrs.ErrNilHandler) {
+	if _, err := command.Wrap[testCreateCmd](nil); !errors.Is(err, cqrs.ErrNilHandler) {
 		t.Fatalf("got %v, want ErrNilHandler", err)
 	}
-	var nilFn cqrs.CommandFunc[testCreateCmd]
-	if _, err := cqrs.WrapCommand[testCreateCmd](nilFn); !errors.Is(err, cqrs.ErrNilHandler) {
+	var nilFn command.Func[testCreateCmd]
+	if _, err := command.Wrap[testCreateCmd](nilFn); !errors.Is(err, cqrs.ErrNilHandler) {
 		t.Fatalf("got %v, want ErrNilHandler for typed nil func", err)
 	}
 	var nilStruct *typedNilHandler
-	if _, err := cqrs.WrapCommand[testCreateCmd](nilStruct); !errors.Is(err, cqrs.ErrNilHandler) {
+	if _, err := command.Wrap[testCreateCmd](nilStruct); !errors.Is(err, cqrs.ErrNilHandler) {
 		t.Fatalf("got %v, want ErrNilHandler for typed nil struct ptr", err)
 	}
 
 	var order []string
-	mw := func(name string) cqrs.CommandMiddleware {
-		return func(next cqrs.UntypedCommandFunc) cqrs.UntypedCommandFunc {
+	mw := func(name string) command.Middleware {
+		return func(next command.UntypedFunc) command.UntypedFunc {
 			return func(ctx context.Context, cmd any) error {
 				order = append(order, name+":before")
 				err := next(ctx, cmd)
@@ -50,8 +51,8 @@ func TestWrapCommandAndNilGuards(t *testing.T) {
 		}
 	}
 
-	wrapped, err := cqrs.WrapCommand(
-		cqrs.CommandFunc[testCreateCmd](func(_ context.Context, cmd testCreateCmd) error {
+	wrapped, err := command.Wrap(
+		command.Func[testCreateCmd](func(_ context.Context, cmd testCreateCmd) error {
 			order = append(order, "handler:"+cmd.ID)
 			return nil
 		}),
@@ -60,11 +61,10 @@ func TestWrapCommandAndNilGuards(t *testing.T) {
 		mw("inner"),
 	)
 	if err != nil {
-		t.Fatalf("WrapCommand: %v", err)
+		t.Fatalf("Wrap: %v", err)
 	}
 
-	//nolint:staticcheck // SA1012: intentionally testing nil context normalization
-	if handleErr := wrapped.Handle(nil, testCreateCmd{ID: "c1"}); handleErr != nil {
+	if handleErr := wrapped.Handle(context.Background(), testCreateCmd{ID: "c1"}); handleErr != nil {
 		t.Fatalf("Handle: %v", handleErr)
 	}
 
@@ -74,11 +74,11 @@ func TestWrapCommandAndNilGuards(t *testing.T) {
 	}
 }
 
-func TestCommandBus_RegistrationAndPreDispatchFailures(t *testing.T) {
+func TestBus_RegistrationAndPreDispatchFailures(t *testing.T) {
 	t.Parallel()
 
-	var nilBus *cqrs.CommandBus
-	if err := cqrs.RegisterCommand(nilBus, cqrs.CommandFunc[testCreateCmd](func(context.Context, testCreateCmd) error {
+	var nilBus *command.Bus
+	if err := command.Register(nilBus, command.Func[testCreateCmd](func(context.Context, testCreateCmd) error {
 		return nil
 	})); !errors.Is(err, cqrs.ErrNilBus) {
 		t.Fatalf("got %v, want ErrNilBus", err)
@@ -87,34 +87,34 @@ func TestCommandBus_RegistrationAndPreDispatchFailures(t *testing.T) {
 		t.Fatalf("nilBus.Dispatch got %v, want ErrNilBus", err)
 	}
 
-	bus, err := cqrs.NewCommandBus(nil)
+	bus, err := command.NewBus(nil)
 	if err != nil {
-		t.Fatalf("NewCommandBus: %v", err)
+		t.Fatalf("NewBus: %v", err)
 	}
 
-	if err := cqrs.RegisterCommand[testCreateCmd](bus, nil); !errors.Is(err, cqrs.ErrNilHandler) {
+	if err := command.Register[testCreateCmd](bus, nil); !errors.Is(err, cqrs.ErrNilHandler) {
 		t.Fatalf("got %v, want ErrNilHandler", err)
 	}
-	if err := cqrs.RegisterCommand(bus, cqrs.CommandFunc[testCmdInterface](func(context.Context, testCmdInterface) error {
+	if err := command.Register(bus, command.Func[testCmdInterface](func(context.Context, testCmdInterface) error {
 		return nil
 	})); !errors.Is(err, cqrs.ErrInvalidMessageType) {
 		t.Fatalf("interface type registration got %v, want ErrInvalidMessageType", err)
 	}
 
-	noop := cqrs.CommandFunc[testCreateCmd](func(context.Context, testCreateCmd) error { return nil })
-	if err := cqrs.RegisterCommand(bus, noop); err != nil {
-		t.Fatalf("RegisterCommand: %v", err)
+	noop := command.Func[testCreateCmd](func(context.Context, testCreateCmd) error { return nil })
+	if err := command.Register(bus, noop); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
-	if err := cqrs.RegisterCommand(bus, noop); !errors.Is(err, cqrs.ErrDuplicateHandler) {
-		t.Fatalf("duplicate RegisterCommand got %v, want ErrDuplicateHandler", err)
+	if err := command.Register(bus, noop); !errors.Is(err, cqrs.ErrDuplicateHandler) {
+		t.Fatalf("duplicate Register got %v, want ErrDuplicateHandler", err)
 	}
 
-	// Pre-dispatch checks: nil, typed-nil ptr, value-vs-pointer mismatch, pre-canceled ctx
-	if err := bus.Dispatch(context.Background(), nil); !errors.Is(err, cqrs.ErrNilCommand) {
+	// Pre-dispatch checks: nil, typed-nil ptr, value-vs-pointer mismatch, pre-canceled ctx, nil ctx panic
+	if err := bus.Dispatch(context.Background(), nil); !errors.Is(err, command.ErrNilCommand) {
 		t.Fatalf("nil command got %v, want ErrNilCommand", err)
 	}
 	var nilPtrCmd *testCreateCmd
-	if err := bus.Dispatch(context.Background(), nilPtrCmd); !errors.Is(err, cqrs.ErrNilCommand) {
+	if err := bus.Dispatch(context.Background(), nilPtrCmd); !errors.Is(err, command.ErrNilCommand) {
 		t.Fatalf("typed nil pointer got %v, want ErrNilCommand", err)
 	}
 	if err := bus.Dispatch(context.Background(), &testCreateCmd{ID: "ptr"}); !errors.Is(err, cqrs.ErrNoHandler) {
@@ -126,30 +126,44 @@ func TestCommandBus_RegistrationAndPreDispatchFailures(t *testing.T) {
 	if err := bus.Dispatch(ctx, testCreateCmd{ID: "1"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled ctx got %v, want context.Canceled", err)
 	}
+
+	t.Run("nil ctx fails loudly instead of defaulting to Background", func(t *testing.T) {
+		t.Parallel()
+
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected Dispatch(nil, ...) to panic")
+			}
+		}()
+		//nolint:staticcheck // SA1012: verifying strict non-nil context contract
+		if dErr := bus.Dispatch(nil, testCreateCmd{ID: "nil-ctx"}); dErr != nil {
+			t.Fatalf("expected panic on nil ctx, got err=%v", dErr)
+		}
+	})
 }
 
-func TestCommandBus_MustRegisterCommandPanicsOnInvalid(t *testing.T) {
+func TestBus_MustRegisterPanicsOnInvalid(t *testing.T) {
 	t.Parallel()
 
-	bus, err := cqrs.NewCommandBus()
+	bus, err := command.NewBus()
 	if err != nil {
-		t.Fatalf("NewCommandBus: %v", err)
+		t.Fatalf("NewBus: %v", err)
 	}
-	cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[testCreateCmd](func(context.Context, testCreateCmd) error {
+	command.MustRegister(bus, command.Func[testCreateCmd](func(context.Context, testCreateCmd) error {
 		return nil
 	}))
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("expected MustRegisterCommand to panic on duplicate registration")
+			t.Fatal("expected MustRegister to panic on duplicate registration")
 		}
 	}()
-	cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[testCreateCmd](func(context.Context, testCreateCmd) error {
+	command.MustRegister(bus, command.Func[testCreateCmd](func(context.Context, testCreateCmd) error {
 		return nil
 	}))
 }
 
-func TestCommandBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
+func TestBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
 	t.Parallel()
 
 	type domainCmd struct{ Fail string }
@@ -157,45 +171,45 @@ func TestCommandBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
 	errDomain := errors.New("guest not verified")
 	errInfra := errors.New("database unreachable")
 
-	t.Run("default MaskRejections masks Reject/classified rejections and surfaces infra faults", func(t *testing.T) {
+	t.Run("default policy masks Reject/classified rejections and surfaces infra faults", func(t *testing.T) {
 		t.Parallel()
 
 		var rejectedSeen []error
 		var mwTrace []string
-		bus, err := cqrs.NewCommandBus(
-			cqrs.WithCommandMiddleware(func(next cqrs.UntypedCommandFunc) cqrs.UntypedCommandFunc {
+		bus, err := command.NewBus(
+			command.WithMiddleware(func(next command.UntypedFunc) command.UntypedFunc {
 				return func(ctx context.Context, cmd any) error {
 					mwTrace = append(mwTrace, "bus")
 					return next(ctx, cmd)
 				}
 			}),
-			cqrs.WithCommandErrorClassifier(func(e error) error {
+			command.WithErrorClassifier(func(e error) error {
 				if errors.Is(e, errDomain) {
-					return cqrs.Reject(e)
+					return command.Reject(e)
 				}
 				return e
 			}),
-			cqrs.WithOnRejected(func(_ context.Context, _ any, e error) {
+			command.WithOnRejected(func(_ context.Context, _ any, e error) {
 				rejectedSeen = append(rejectedSeen, e)
 			}),
 		)
 		if err != nil {
-			t.Fatalf("NewCommandBus: %v", err)
+			t.Fatalf("NewBus: %v", err)
 		}
 
-		cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[domainCmd](func(_ context.Context, c domainCmd) error {
+		command.MustRegister(bus, command.Func[domainCmd](func(_ context.Context, c domainCmd) error {
 			mwTrace = append(mwTrace, "handler")
 			switch c.Fail {
 			case "classified":
 				return errDomain
 			case "marked":
-				return cqrs.Reject(errors.New("explicit rejection"))
+				return command.Reject(errors.New("explicit rejection"))
 			case "infra":
 				return errInfra
 			default:
 				return nil
 			}
-		}), func(next cqrs.UntypedCommandFunc) cqrs.UntypedCommandFunc {
+		}), func(next command.UntypedFunc) command.UntypedFunc {
 			return func(ctx context.Context, cmd any) error {
 				mwTrace = append(mwTrace, "route")
 				return next(ctx, cmd)
@@ -227,23 +241,23 @@ func TestCommandBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
 	t.Run("StrictOpaque requires non-nil sink and masks all post-lookup errors", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := cqrs.NewCommandBus(cqrs.WithStrictOpaqueDispatch(nil)); !errors.Is(err, cqrs.ErrNilErrorSink) {
+		if _, err := command.NewBus(command.WithStrictOpaqueDispatch(nil)); !errors.Is(err, command.ErrNilErrorSink) {
 			t.Fatalf("nil sink got %v, want ErrNilErrorSink", err)
 		}
 
 		var sunk []error
-		bus, err := cqrs.NewCommandBus(cqrs.WithStrictOpaqueDispatch(func(_ context.Context, _ any, e error) {
+		bus, err := command.NewBus(command.WithStrictOpaqueDispatch(func(_ context.Context, _ any, e error) {
 			sunk = append(sunk, e)
 		}))
 		if err != nil {
-			t.Fatalf("NewCommandBus: %v", err)
+			t.Fatalf("NewBus: %v", err)
 		}
 
-		cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[domainCmd](func(_ context.Context, c domainCmd) error {
+		command.MustRegister(bus, command.Func[domainCmd](func(_ context.Context, c domainCmd) error {
 			if c.Fail == "infra" {
 				return errInfra
 			}
-			return cqrs.Reject(errDomain)
+			return command.Reject(errDomain)
 		}))
 
 		if dErr := bus.Dispatch(context.Background(), domainCmd{Fail: "infra"}); dErr != nil {
@@ -260,16 +274,16 @@ func TestCommandBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
 	t.Run("PassthroughErrors returns every error untouched", func(t *testing.T) {
 		t.Parallel()
 
-		bus, err := cqrs.NewCommandBus(cqrs.WithPassthroughErrors())
+		bus, err := command.NewBus(command.WithPassthroughErrors())
 		if err != nil {
-			t.Fatalf("NewCommandBus: %v", err)
+			t.Fatalf("NewBus: %v", err)
 		}
-		cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[domainCmd](func(_ context.Context, _ domainCmd) error {
-			return cqrs.Reject(errDomain)
+		command.MustRegister(bus, command.Func[domainCmd](func(_ context.Context, _ domainCmd) error {
+			return command.Reject(errDomain)
 		}))
 
 		got := bus.Dispatch(context.Background(), domainCmd{})
-		if !errors.Is(got, errDomain) || !cqrs.IsRejected(got) {
+		if !errors.Is(got, errDomain) || !command.IsRejected(got) {
 			t.Fatalf("expected raw rejected errDomain, got %v", got)
 		}
 	})

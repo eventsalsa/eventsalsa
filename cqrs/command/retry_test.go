@@ -1,4 +1,4 @@
-package cqrs_test
+package command_test
 
 import (
 	"context"
@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
 )
 
-func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
+func TestRetryMiddleware_SuccessAndRetries(t *testing.T) {
 	t.Parallel()
 
 	type workCmd struct{}
@@ -21,20 +22,20 @@ func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
 		t.Parallel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[workCmd](func(_ context.Context, _ workCmd) error {
+		h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
 			attempts++
 			if attempts < 3 {
 				return errTransient
 			}
 			return nil
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 3,
 			BaseBackoff: time.Millisecond,
 			MaxBackoff:  5 * time.Millisecond,
 			RetryIf:     func(e error) bool { return errors.Is(e, errTransient) },
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		if runErr := h.Handle(context.Background(), workCmd{}); runErr != nil {
@@ -49,16 +50,16 @@ func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
 		t.Parallel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[workCmd](func(_ context.Context, _ workCmd) error {
+		h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
 			attempts++
 			return errFatal
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 4,
 			BaseBackoff: time.Millisecond,
 			RetryIf:     func(e error) bool { return errors.Is(e, errTransient) },
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		runErr := h.Handle(context.Background(), workCmd{})
@@ -74,17 +75,17 @@ func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
 		t.Parallel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[workCmd](func(_ context.Context, _ workCmd) error {
+		h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
 			attempts++
 			return errTransient
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 3,
 			BaseBackoff: time.Millisecond,
 			MaxBackoff:  2 * time.Millisecond,
 			RetryIf:     func(e error) bool { return errors.Is(e, errTransient) },
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		runErr := h.Handle(context.Background(), workCmd{})
@@ -97,15 +98,15 @@ func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
 		t.Parallel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[workCmd](func(_ context.Context, _ workCmd) error {
+		h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
 			attempts++
 			return errTransient
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 5,
 			RetryIf:     nil,
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		runErr := h.Handle(context.Background(), workCmd{})
@@ -115,7 +116,7 @@ func TestRetryCommandMiddleware_SuccessAndRetries(t *testing.T) {
 	})
 }
 
-func TestRetryCommandMiddleware_ContextCancellationAndCausationStability(t *testing.T) {
+func TestRetryMiddleware_ContextCancellationAndObservabilityStability(t *testing.T) {
 	t.Parallel()
 
 	type retryCmd struct{}
@@ -126,15 +127,15 @@ func TestRetryCommandMiddleware_ContextCancellationAndCausationStability(t *test
 		t.Parallel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[retryCmd](func(_ context.Context, _ retryCmd) error {
+		h, err := command.Wrap(command.Func[retryCmd](func(_ context.Context, _ retryCmd) error {
 			attempts++
 			return nil
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 3,
 			RetryIf:     func(error) bool { return true },
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -155,18 +156,18 @@ func TestRetryCommandMiddleware_ContextCancellationAndCausationStability(t *test
 		defer cancel()
 
 		attempts := 0
-		h, err := cqrs.WrapCommand(cqrs.CommandFunc[retryCmd](func(_ context.Context, _ retryCmd) error {
+		h, err := command.Wrap(command.Func[retryCmd](func(_ context.Context, _ retryCmd) error {
 			attempts++
 			cancel()
 			return errRetry
-		}), cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		}), command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 4,
 			BaseBackoff: 500 * time.Millisecond,
 			MaxBackoff:  time.Second,
 			RetryIf:     func(error) bool { return true },
 		}))
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		start := time.Now()
@@ -180,20 +181,20 @@ func TestRetryCommandMiddleware_ContextCancellationAndCausationStability(t *test
 		}
 	})
 
-	t.Run("CausationMiddleware outside Retry preserves single CommandID", func(t *testing.T) {
+	t.Run("ObservabilityMiddleware outside Retry preserves single CommandID", func(t *testing.T) {
 		t.Parallel()
 
 		var seenCommandIDs []string
-		h, err := cqrs.WrapCommand(
-			cqrs.CommandFunc[retryCmd](func(ctx context.Context, _ retryCmd) error {
+		h, err := command.Wrap(
+			command.Func[retryCmd](func(ctx context.Context, _ retryCmd) error {
 				seenCommandIDs = append(seenCommandIDs, cqrs.CommandIDFromContext(ctx))
 				if len(seenCommandIDs) < 2 {
 					return errRetry
 				}
 				return nil
 			}),
-			cqrs.CausationMiddleware(),
-			cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+			command.ObservabilityMiddleware(),
+			command.RetryMiddleware(command.RetryConfig{
 				MaxAttempts: 3,
 				BaseBackoff: time.Millisecond,
 				MaxBackoff:  5 * time.Millisecond,
@@ -201,7 +202,7 @@ func TestRetryCommandMiddleware_ContextCancellationAndCausationStability(t *test
 			}),
 		)
 		if err != nil {
-			t.Fatalf("WrapCommand: %v", err)
+			t.Fatalf("Wrap: %v", err)
 		}
 
 		if runErr := h.Handle(context.Background(), retryCmd{}); runErr != nil {

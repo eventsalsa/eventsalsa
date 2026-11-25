@@ -10,7 +10,7 @@ A component-based, PostgreSQL-native stack for event sourcing in Go — hosted a
 | **Projector** | `eventsalsa.dev/projector` | Horizontally scalable async projection daemon with PostgreSQL MVCC visibility-horizon checkpointing, leader election, and telemetry |
 | **Snapshot** | `eventsalsa.dev/snapshot` | Generic (`[T any]`) stream state snapshotting with pluggable codecs, payload transformers, and schema upcasters |
 | **Encryption** | `eventsalsa.dev/encryption` | KMS-native envelope encryption (`kek/local`, `kek/awskms`, `kek/gcpkms`), AAD scope binding, GDPR crypto-shredding, and blind indexing |
-| **CQRS** | `eventsalsa.dev/cqrs` | Transport-free `CommandHandler` / `QueryHandler` primitives, composable middlewares, optional `CommandBus` / `QueryBus`, causation propagation, jittered retries, and `cqrs/spectest` BDD harness (`0.0.x` pre-release) |
+| **CQRS** | `eventsalsa.dev/cqrs` | Transport-free `cqrs/command` (`Bus.Dispatch`), `cqrs/query` (`Execute`), observability middleware, jittered retries, and `cqrs/spectest` BDD specs (`0.0.x` pre-release) |
 
 ## Installation
 

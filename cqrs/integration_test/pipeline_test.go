@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
+	"eventsalsa.dev/cqrs/query"
 )
 
 type fakeTxKey struct{}
@@ -58,8 +60,8 @@ func newMemStore() *memStore {
 
 // nonReentrantTxMiddleware mirrors deterministic UoW scoping: refuses nested starts
 // with errTxAlreadyActive instead of silently masking wiring mistakes.
-func (s *memStore) txMiddleware() cqrs.CommandMiddleware {
-	return func(next cqrs.UntypedCommandFunc) cqrs.UntypedCommandFunc {
+func (s *memStore) txMiddleware() command.Middleware {
+	return func(next command.UntypedFunc) command.UntypedFunc {
 		return func(ctx context.Context, cmd any) error {
 			if _, active := ctx.Value(fakeTxKey{}).(*fakeTx); active {
 				return errTxAlreadyActive
@@ -132,25 +134,23 @@ func TestIntegration_EndToEndWriteNestedPolicyAndQueryReadback(t *testing.T) {
 		return fmt.Sprintf("uuid-%d", seq.Add(1))
 	}
 
-	// Internal passthrough bus for reentrant downstream command execution without tx nesting
-	// inside the parent handler's already committed phase.
 	var mu sync.Mutex
-	var causationLog []cqrs.Causation
+	var obsLog []cqrs.Observability
 
-	cmdBus, err := cqrs.NewCommandBus(
-		cqrs.WithCommandMiddleware(
-			cqrs.CausationMiddleware(cqrs.WithIDGenerator(nextID)),
+	cmdBus, err := command.NewBus(
+		command.WithMiddleware(
+			command.ObservabilityMiddleware(command.WithIDGenerator(nextID)),
 			store.txMiddleware(),
 		),
 	)
 	if err != nil {
-		t.Fatalf("NewCommandBus: %v", err)
+		t.Fatalf("NewBus: %v", err)
 	}
 
-	cqrs.MustRegisterCommand(cmdBus, cqrs.CommandFunc[confirmOrder](func(ctx context.Context, cmd confirmOrder) error {
-		c, _ := cqrs.CausationFromContext(ctx)
+	command.MustRegister(cmdBus, command.Func[confirmOrder](func(ctx context.Context, cmd confirmOrder) error {
+		obs, _ := cqrs.ObservabilityFromContext(ctx)
 		mu.Lock()
-		causationLog = append(causationLog, c)
+		obsLog = append(obsLog, obs)
 		mu.Unlock()
 
 		existing, readErr := store.readCommitted(cmd.OrderID)
@@ -158,41 +158,44 @@ func TestIntegration_EndToEndWriteNestedPolicyAndQueryReadback(t *testing.T) {
 			return readErr
 		}
 		existing.Status = "CONFIRMED"
-		existing.CommandID = c.CommandID
-		existing.CausationID = c.CausationID
+		existing.CommandID = obs.CommandID
+		existing.CausationID = obs.CausationID
 		return store.upsertInTx(ctx, &existing)
 	}))
 
-	// Separate edge command handler dispatches Commit-then-Followup outside active txCtx
-	// (avoiding nested TxMiddleware inside the open PlaceOrder tx).
-	cqrs.MustRegisterCommand(cmdBus, cqrs.CommandFunc[placeOrder](func(ctx context.Context, cmd placeOrder) error {
-		c, _ := cqrs.CausationFromContext(ctx)
+	command.MustRegister(cmdBus, command.Func[placeOrder](func(ctx context.Context, cmd placeOrder) error {
+		obs, _ := cqrs.ObservabilityFromContext(ctx)
 		mu.Lock()
-		causationLog = append(causationLog, c)
+		obsLog = append(obsLog, obs)
 		mu.Unlock()
 
 		return store.upsertInTx(ctx, &orderRecord{
 			OrderID:    cmd.OrderID,
 			CustomerID: cmd.CustomerID,
 			Status:     "PLACED",
-			TraceID:    c.TraceID,
-			CommandID:  c.CommandID,
+			TraceID:    obs.TraceID,
+			CommandID:  obs.CommandID,
 			Amount:     cmd.Amount,
 		})
 	}))
 
-	queryBus, err := cqrs.NewQueryBus(cqrs.WithQueryMiddleware(func(next cqrs.UntypedQueryFunc) cqrs.UntypedQueryFunc {
-		return func(ctx context.Context, q any) (any, error) {
-			readCtx, cancel := context.WithTimeout(ctx, time.Second)
-			defer cancel()
-			return next(readCtx, q)
-		}
-	}))
+	queryBus, err := query.NewBus(
+		query.WithMiddleware(
+			query.ObservabilityMiddleware(),
+			func(next query.UntypedFunc) query.UntypedFunc {
+				return func(ctx context.Context, q any) (any, error) {
+					readCtx, cancel := context.WithTimeout(ctx, time.Second)
+					defer cancel()
+					return next(readCtx, q)
+				}
+			},
+		),
+	)
 	if err != nil {
-		t.Fatalf("NewQueryBus: %v", err)
+		t.Fatalf("query.NewBus: %v", err)
 	}
 
-	cqrs.MustRegisterQuery(queryBus, cqrs.QueryFunc[getOrder, orderRecord](func(_ context.Context, q getOrder) (orderRecord, error) {
+	query.MustRegister(queryBus, query.Func[getOrder, orderRecord](func(_ context.Context, q getOrder) (orderRecord, error) {
 		return store.readCommitted(q.OrderID)
 	}))
 
@@ -201,26 +204,26 @@ func TestIntegration_EndToEndWriteNestedPolicyAndQueryReadback(t *testing.T) {
 		t.Fatalf("Dispatch placeOrder: %v", dErr)
 	}
 
-	// Simulate event/policy dispatching follow-up ConfirmOrder carrying parent PlaceOrder causation
-	placeCausation := causationLog[0]
-	policyCtx := cqrs.WithCausation(context.Background(), placeCausation)
+	// Simulate event/policy dispatching follow-up ConfirmOrder carrying parent PlaceOrder observability
+	placeObs := obsLog[0]
+	policyCtx := cqrs.WithObservability(context.Background(), placeObs)
 	if dErr := cmdBus.Dispatch(policyCtx, confirmOrder{OrderID: "ord-1"}); dErr != nil {
 		t.Fatalf("Dispatch confirmOrder: %v", dErr)
 	}
 
-	view, qErr := cqrs.Query[orderRecord](rootCtx, queryBus, getOrder{OrderID: "ord-1"})
+	view, qErr := query.Execute[orderRecord](rootCtx, queryBus, getOrder{OrderID: "ord-1"})
 	if qErr != nil {
-		t.Fatalf("Query getOrder: %v", qErr)
+		t.Fatalf("Execute getOrder: %v", qErr)
 	}
 	if view.Status != "CONFIRMED" || view.TraceID != "http-trace-1" {
 		t.Fatalf("unexpected view: %+v", view)
 	}
-	if view.CausationID != placeCausation.CommandID || view.CommandID == "" || view.CommandID == placeCausation.CommandID {
-		t.Fatalf("broken causation link: place=%+v view=%+v", placeCausation, view)
+	if view.CausationID != placeObs.CommandID || view.CommandID == "" || view.CommandID == placeObs.CommandID {
+		t.Fatalf("broken causation link: place=%+v view=%+v", placeObs, view)
 	}
 }
 
-func TestIntegration_CausationRetryTxRollbackAndCommitComposition(t *testing.T) {
+func TestIntegration_ObservabilityRetryTxRollbackAndCommitComposition(t *testing.T) {
 	t.Parallel()
 
 	store := newMemStore()
@@ -229,9 +232,9 @@ func TestIntegration_CausationRetryTxRollbackAndCommitComposition(t *testing.T) 
 	var attempt int
 	var seenCmdIDs []string
 
-	// Correct composition order: Causation (once) -> Retry -> TxMiddleware -> Handler.
-	h, err := cqrs.WrapCommand(
-		cqrs.CommandFunc[retryOrderCmd](func(ctx context.Context, cmd retryOrderCmd) error {
+	// Correct composition order: Observability (once) -> Retry -> TxMiddleware -> Handler.
+	h, err := command.Wrap(
+		command.Func[retryOrderCmd](func(ctx context.Context, cmd retryOrderCmd) error {
 			attempt++
 			seenCmdIDs = append(seenCmdIDs, cqrs.CommandIDFromContext(ctx))
 
@@ -246,8 +249,8 @@ func TestIntegration_CausationRetryTxRollbackAndCommitComposition(t *testing.T) 
 			}
 			return nil
 		}),
-		cqrs.CausationMiddleware(),
-		cqrs.RetryCommandMiddleware(cqrs.RetryConfig{
+		command.ObservabilityMiddleware(),
+		command.RetryMiddleware(command.RetryConfig{
 			MaxAttempts: 3,
 			BaseBackoff: time.Millisecond,
 			MaxBackoff:  3 * time.Millisecond,
@@ -256,7 +259,7 @@ func TestIntegration_CausationRetryTxRollbackAndCommitComposition(t *testing.T) 
 		store.txMiddleware(),
 	)
 	if err != nil {
-		t.Fatalf("WrapCommand: %v", err)
+		t.Fatalf("command.Wrap: %v", err)
 	}
 
 	if runErr := h.Handle(context.Background(), retryOrderCmd{OrderID: "ord-retry"}); runErr != nil {
@@ -284,28 +287,28 @@ func TestIntegration_DoubleTxFailsDeterministicallyAndOpacityDistinguishesInfra(
 	type chargeCmd struct{ Amount int64 }
 
 	var rejectedCount atomic.Int64
-	edgeBus, err := cqrs.NewCommandBus(
-		cqrs.WithCommandMiddleware(store.txMiddleware()),
-		cqrs.WithCommandErrorClassifier(func(e error) error {
+	edgeBus, err := command.NewBus(
+		command.WithMiddleware(store.txMiddleware()),
+		command.WithErrorClassifier(func(e error) error {
 			if errors.Is(e, errInsufficientFunds) {
-				return cqrs.Reject(e)
+				return command.Reject(e)
 			}
 			return e
 		}),
-		cqrs.WithOnRejected(func(context.Context, any, error) {
+		command.WithOnRejected(func(context.Context, any, error) {
 			rejectedCount.Add(1)
 		}),
 	)
 	if err != nil {
-		t.Fatalf("NewCommandBus edge: %v", err)
+		t.Fatalf("NewBus edge: %v", err)
 	}
 
 	// Route mistakenly installs a second TxMiddleware inside outer bus TxMiddleware.
-	cqrs.MustRegisterCommand(edgeBus, cqrs.CommandFunc[nestedBugCmd](func(ctx context.Context, c nestedBugCmd) error {
+	command.MustRegister(edgeBus, command.Func[nestedBugCmd](func(ctx context.Context, c nestedBugCmd) error {
 		return store.upsertInTx(ctx, &orderRecord{OrderID: c.OrderID, Status: "SHOULD_NOT_COMMIT"})
 	}), store.txMiddleware())
 
-	cqrs.MustRegisterCommand(edgeBus, cqrs.CommandFunc[chargeCmd](func(ctx context.Context, c chargeCmd) error {
+	command.MustRegister(edgeBus, command.Func[chargeCmd](func(ctx context.Context, c chargeCmd) error {
 		if wErr := store.upsertInTx(ctx, &orderRecord{OrderID: "partial", Amount: c.Amount}); wErr != nil {
 			return wErr
 		}
@@ -333,7 +336,7 @@ func TestIntegration_DoubleTxFailsDeterministicallyAndOpacityDistinguishesInfra(
 		t.Fatalf("partial write should have rolled back on rejection, got %v", readErr)
 	}
 
-	// 3. Simulated DB outage must NOT be masked by MaskRejections default!
+	// 3. Simulated DB outage must NOT be masked by default rejection-masking policy!
 	store.dbDown.Store(true)
 	if outErr := edgeBus.Dispatch(context.Background(), chargeCmd{Amount: 1}); !errors.Is(outErr, errDBUnavailable) {
 		t.Fatalf("DB outage must surface untouched, got %v", outErr)
@@ -344,14 +347,14 @@ func TestIntegration_DoubleTxFailsDeterministicallyAndOpacityDistinguishesInfra(
 
 	// 4. Passthrough bus returns raw domain rejection for inbound async consumers.
 	store.dbDown.Store(false)
-	internalBus, err := cqrs.NewCommandBus(
-		cqrs.WithCommandMiddleware(store.txMiddleware()),
-		cqrs.WithPassthroughErrors(),
+	internalBus, err := command.NewBus(
+		command.WithMiddleware(store.txMiddleware()),
+		command.WithPassthroughErrors(),
 	)
 	if err != nil {
-		t.Fatalf("NewCommandBus internal: %v", err)
+		t.Fatalf("NewBus internal: %v", err)
 	}
-	cqrs.MustRegisterCommand(internalBus, cqrs.CommandFunc[chargeCmd](func(context.Context, chargeCmd) error {
+	command.MustRegister(internalBus, command.Func[chargeCmd](func(context.Context, chargeCmd) error {
 		return errInsufficientFunds
 	}))
 	if passthroughErr := internalBus.Dispatch(context.Background(), chargeCmd{Amount: 50}); !errors.Is(passthroughErr, errInsufficientFunds) {
@@ -373,7 +376,7 @@ func TestIntegration_StrictOpaquePanicRecoveryAndConcurrentStress(t *testing.T) 
 		state    = make(map[int]int)
 	)
 
-	recoverMW := func(next cqrs.UntypedCommandFunc) cqrs.UntypedCommandFunc {
+	recoverMW := func(next command.UntypedFunc) command.UntypedFunc {
 		return func(ctx context.Context, cmd any) (retErr error) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -384,25 +387,25 @@ func TestIntegration_StrictOpaquePanicRecoveryAndConcurrentStress(t *testing.T) 
 		}
 	}
 
-	bus, err := cqrs.NewCommandBus(
-		cqrs.WithCommandMiddleware(
+	bus, err := command.NewBus(
+		command.WithMiddleware(
 			recoverMW,
-			cqrs.CausationMiddleware(),
+			command.ObservabilityMiddleware(),
 		),
-		cqrs.WithStrictOpaqueDispatch(func(_ context.Context, _ any, e error) {
+		command.WithStrictOpaqueDispatch(func(_ context.Context, _ any, e error) {
 			mu.Lock()
 			sinkErrs = append(sinkErrs, e)
 			mu.Unlock()
 		}),
 	)
 	if err != nil {
-		t.Fatalf("NewCommandBus: %v", err)
+		t.Fatalf("NewBus: %v", err)
 	}
 
-	cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[panicCmd](func(context.Context, panicCmd) error {
+	command.MustRegister(bus, command.Func[panicCmd](func(context.Context, panicCmd) error {
 		panic("unexpected nil deref")
 	}))
-	cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[childWork](func(ctx context.Context, c childWork) error {
+	command.MustRegister(bus, command.Func[childWork](func(ctx context.Context, c childWork) error {
 		if cqrs.CausationIDFromContext(ctx) == "" {
 			return errors.New("missing parent causation ID")
 		}
@@ -411,15 +414,15 @@ func TestIntegration_StrictOpaquePanicRecoveryAndConcurrentStress(t *testing.T) 
 		mu.Unlock()
 		return nil
 	}))
-	cqrs.MustRegisterCommand(bus, cqrs.CommandFunc[parentWork](func(ctx context.Context, c parentWork) error {
+	command.MustRegister(bus, command.Func[parentWork](func(ctx context.Context, c parentWork) error {
 		return bus.Dispatch(ctx, childWork(c))
 	}))
 
-	qBus, err := cqrs.NewQueryBus()
+	qBus, err := query.NewBus()
 	if err != nil {
-		t.Fatalf("NewQueryBus: %v", err)
+		t.Fatalf("query.NewBus: %v", err)
 	}
-	cqrs.MustRegisterQuery(qBus, cqrs.QueryFunc[readWork, int](func(_ context.Context, q readWork) (int, error) {
+	query.MustRegister(qBus, query.Func[readWork, int](func(_ context.Context, q readWork) (int, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return state[q.Worker], nil
@@ -446,7 +449,7 @@ func TestIntegration_StrictOpaquePanicRecoveryAndConcurrentStress(t *testing.T) 
 				errs <- dErr
 				return
 			}
-			val, qErr := cqrs.Query[int](ctx, qBus, readWork{Worker: i})
+			val, qErr := query.Execute[int](ctx, qBus, readWork{Worker: i})
 			if qErr != nil || val != 1 {
 				errs <- fmt.Errorf("worker %d got (%d, %v), want (1, nil)", i, val, qErr)
 			}
