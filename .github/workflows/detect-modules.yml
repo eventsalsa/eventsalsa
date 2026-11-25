@@ -67,6 +67,8 @@ jobs:
               - 'encryption/kek/gcpkms/**'
             encryption_examples:
               - 'encryption/examples/**'
+            cqrs:
+              - 'cqrs/**'
             docs:
               - 'docs/**'
 
@@ -85,6 +87,7 @@ jobs:
           AWSKMS_CHANGED: ${{ steps.filter.outputs.encryption_awskms }}
           GCPKMS_CHANGED: ${{ steps.filter.outputs.encryption_gcpkms }}
           EXAMPLES_CHANGED: ${{ steps.filter.outputs.encryption_examples }}
+          CQRS_CHANGED: ${{ steps.filter.outputs.cqrs }}
         run: |
           all_modules='[
             {"key":"store","dir":"store","integration":true,"published":true,"gosec_name":"store","gosec_args":""},
@@ -93,7 +96,8 @@ jobs:
             {"key":"encryption","dir":"encryption","integration":true,"published":true,"gosec_name":"encryption","gosec_args":"-exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples"},
             {"key":"encryption_awskms","dir":"encryption/kek/awskms","integration":false,"published":true,"gosec_name":"encryption-kek-awskms","gosec_args":""},
             {"key":"encryption_gcpkms","dir":"encryption/kek/gcpkms","integration":false,"published":true,"gosec_name":"encryption-kek-gcpkms","gosec_args":""},
-            {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false,"gosec_name":"encryption-examples","gosec_args":""}
+            {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false,"gosec_name":"encryption-examples","gosec_args":""},
+            {"key":"cqrs","dir":"cqrs","integration":true,"published":true,"gosec_name":"cqrs","gosec_args":""}
           ]'
           root_changed="false"
           if [ "$EVENT_NAME" != "pull_request" ] || [ "$ROOT_SHARED" = "true" ] || { [ "$TARGET" = "ci" ] && [ "$ROOT_CI" = "true" ]; } || { [ "$TARGET" = "security" ] && [ "$ROOT_SECURITY" = "true" ]; }; then
@@ -107,7 +111,8 @@ jobs:
               --arg encryption "$ENCRYPTION_CHANGED" \
               --arg encryption_awskms "$AWSKMS_CHANGED" \
               --arg encryption_gcpkms "$GCPKMS_CHANGED" \
-              --arg encryption_examples "$EXAMPLES_CHANGED" '
+              --arg encryption_examples "$EXAMPLES_CHANGED" \
+              --arg cqrs "$CQRS_CHANGED" '
                 [ .[] | select(
                   (.key == "store" and $store == "true") or
                   (.key == "snapshot" and ($snapshot == "true" or $store == "true")) or
@@ -115,7 +120,8 @@ jobs:
                   (.key == "encryption" and $encryption == "true") or
                   (.key == "encryption_awskms" and ($encryption_awskms == "true" or $encryption == "true")) or
                   (.key == "encryption_gcpkms" and ($encryption_gcpkms == "true" or $encryption == "true")) or
-                  (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true"))
+                  (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true")) or
+                  (.key == "cqrs" and $cqrs == "true")
                 ) ]')
           fi
           has_modules="false"

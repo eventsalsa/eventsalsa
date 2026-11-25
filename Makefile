@@ -1,8 +1,8 @@
-GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples
-INTEGRATION_MODULES := store snapshot projector encryption
+GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs
+INTEGRATION_MODULES := store snapshot projector encryption cqrs
 
 .PHONY: help check fmt fmt-check vet lint build test test-unit test-integration gosec vuln docs-build \
-	check-store check-snapshot check-projector check-encryption
+	check-store check-snapshot check-projector check-encryption check-cqrs
 
 help: ## Show available targets
 	@echo 'Usage: make [target]'
@@ -14,7 +14,7 @@ check: fmt-check vet lint test-unit test-integration gosec vuln docs-build ## Ru
 
 fmt: ## Format Go files across all modules
 	@for mod in $(GO_MODULES); do \
-		(cd "$$mod" && gofmt -w -s . && goimports -w -local eventsalsa.dev .); \
+		(cd "$$mod" && gofmt -w -s .); \
 	done
 
 fmt-check: ## Verify formatting across all modules
@@ -97,3 +97,6 @@ check-projector: ## Run full Go check suite for projector
 
 check-encryption: ## Run full Go check suite for encryption and KMS/example submodules
 	$(MAKE) -C encryption check
+
+check-cqrs: ## Run full Go check suite for cqrs
+	$(MAKE) -C cqrs check

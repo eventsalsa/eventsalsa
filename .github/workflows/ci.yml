@@ -44,6 +44,7 @@ jobs:
         with:
           go-version: "1.27.4"
           cache-dependency-path: |
+            ${{ matrix.module.dir }}/go.mod
             ${{ matrix.module.dir }}/go.sum
 
       - name: Check formatting

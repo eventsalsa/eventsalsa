@@ -49,6 +49,7 @@ export default defineConfig({
 						{ label: 'Store', slug: 'documentation/components/store' },
 						{ label: 'Projector', slug: 'documentation/components/projector' },
 						{ label: 'Encryption', slug: 'documentation/components/encryption' },
+						{ label: 'CQRS', slug: 'documentation/components/cqrs' },
 					],
 				},
 				{

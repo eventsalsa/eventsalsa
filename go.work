@@ -8,4 +8,5 @@ use (
 	./encryption/kek/awskms
 	./encryption/kek/gcpkms
 	./encryption/examples
+	./cqrs
 )

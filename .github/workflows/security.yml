@@ -45,7 +45,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.4"
-          cache-dependency-path: ${{ matrix.module.dir }}/go.sum
+          cache-dependency-path: |
+            ${{ matrix.module.dir }}/go.mod
+            ${{ matrix.module.dir }}/go.sum
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -113,7 +115,7 @@ jobs:
           build-mode: manual
 
       - name: Build all modules
-        run: go build ./store/... ./snapshot/... ./projector/... ./encryption/... ./encryption/kek/awskms/... ./encryption/kek/gcpkms/... ./encryption/examples/...
+        run: go build ./store/... ./snapshot/... ./projector/... ./encryption/... ./encryption/kek/awskms/... ./encryption/kek/gcpkms/... ./encryption/examples/... ./cqrs/...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
