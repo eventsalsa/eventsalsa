@@ -8,8 +8,6 @@
 
 It separates write-side domain commands (`eventsalsa.dev/cqrs/command`) from lightweight UI and reporting queries (`eventsalsa.dev/cqrs/query`), propagates observability context (`eventsalsa.dev/cqrs`), and offers in-memory domain behavior testing (`eventsalsa.dev/cqrs/spectest`) while relying only on the Go standard library and `github.com/google/uuid`. It works cleanly in standard CRUD applications as well as alongside `eventsalsa/store` and `eventsalsa/projector`.
 
-> **Pre-release status:** `eventsalsa.dev/cqrs` is developed in the `0.0.*` pre-release series while its ergonomics stabilize prior to `v0.1.0`.
-
 ## Features
 
 - **Zero database or broker coupling** — no `pgx`, `store`, `projector`, HTTP router, or message-broker dependencies; works with or without Event Sourcing

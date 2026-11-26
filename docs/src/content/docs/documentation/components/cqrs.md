@@ -7,8 +7,6 @@ description: Separate write commands from read queries in Go with eventsalsa/cqr
 
 It gives your application explicit contracts for write commands and read queries without coupling your code to any SQL driver, ORM, event store, projection daemon, or HTTP framework. Only the Go standard library and `github.com/google/uuid` are required, so `eventsalsa/cqrs` fits naturally in relational CRUD applications as well as event-sourced systems.
 
-> `eventsalsa.dev/cqrs` is currently in the `0.0.*` pre-release series while its ergonomics stabilize prior to `v0.1.0`.
-
 ## What is CQRS?
 
 CQRS is an architectural pattern that splits **domain logic that moves the system forward** (commands) from **UI and reporting read operations** (queries).
@@ -91,64 +89,85 @@ No database migrations or background workers are needed for this module. For com
 
 ## The write side
 
-Commands represent an intent to validate a rule and change application state. Because write operations either succeed or report why they could not proceed, handlers in `eventsalsa.dev/cqrs/command` return only `error`.
+Write operations represent actions that validate business rules and advance application state—for example placing an order or canceling a subscription. Handlers in `eventsalsa.dev/cqrs/command` return only `error`.
 
-### Registering and dispatching commands
+### Step 1: Define a command
 
-You can organize commands around a central `command.Bus` or wire individual handlers directly:
-
-- **With `command.Bus`:** Register each concrete command type once at startup (`command.Register` or `command.MustRegister`) and dispatch commands from HTTP handlers, background workers, or policies via `bus.Dispatch(ctx, cmd)`.
-- **Without a bus:** Wrap an individual `command.Handler[C]` with `command.Wrap(handler, mw...)` and pass the wrapped `command.Handler[C]` straight to callers that invoke `Handle(ctx, cmd)` explicitly.
-
-The example below defines a `PlaceOrder` command, attaches a handler to `command.Bus`, and dispatches a command:
+Model each write action as a plain Go struct carrying only the inputs needed to validate rules and perform the change:
 
 ```go
-package main
-
-import (
-	"context"
-	"log/slog"
-
-	"eventsalsa.dev/cqrs/command"
-)
-
 type PlaceOrder struct {
 	OrderID    string
 	CustomerID string
 	TotalCents int64
 }
+```
 
-func dispatchOrderExample(ctx context.Context, orders OrderRepository, logger *slog.Logger) error {
-	bus, err := command.NewBus(
-		command.WithMiddleware(command.ObservabilityMiddleware()),
-	)
-	if err != nil {
-		return err
-	}
+### Step 2: Implement a handler
 
-	placeOrder := command.Func[PlaceOrder](func(ctx context.Context, cmd PlaceOrder) error {
-		return orders.Create(ctx, cmd.OrderID, cmd.CustomerID, cmd.TotalCents)
-	})
+A handler receives `ctx` and the command, enforces business rules, persists state, and returns `nil` or an error. Implement `command.Handler[PlaceOrder]` directly on a struct or adapt a function with `command.Func[PlaceOrder]`:
 
-	if regErr := command.Register(bus, placeOrder); regErr != nil {
-		return regErr
-	}
+```go
+var errInvalidTotal = errors.New("order total must be positive")
 
-	return bus.Dispatch(ctx, PlaceOrder{
-		OrderID:    "ord-100",
-		CustomerID: "cust-42",
-		TotalCents: 14900,
+func newPlaceOrderHandler(orders OrderRepository) command.Handler[PlaceOrder] {
+	return command.Func[PlaceOrder](func(ctx context.Context, cmd PlaceOrder) error {
+		if cmd.TotalCents <= 0 {
+			return errInvalidTotal
+		}
+		return orders.SaveNew(ctx, cmd.OrderID, cmd.CustomerID, cmd.TotalCents)
 	})
 }
 ```
 
-Dispatch looks up the exact dynamic Go type passed to `Dispatch`, so registering `PlaceOrder` expects callers to pass a value `PlaceOrder{...}` rather than a pointer `&PlaceOrder{...}`. Registering an interface type fails at startup with `cqrs.ErrInvalidMessageType`.
+Keep business decisions inside write handlers rather than HTTP controllers or transport layers so every caller goes through the exact same validation path.
+
+### Step 3: Create a bus and register the handler
+
+At application startup, create a `command.Bus` and bind each concrete command type to its handler once:
+
+```go
+bus, err := command.NewBus()
+if err != nil {
+	return err
+}
+
+if regErr := command.Register(bus, newPlaceOrderHandler(orders)); regErr != nil {
+	return regErr
+}
+```
+
+The bus routes each dispatched command to its registered handler and applies shared middlewares and error policies uniformly. If you prefer passing an explicit typed handler directly into a service or HTTP controller without a shared bus, decorate that handler with `command.Wrap(handler, mw...)` and invoke `.Handle(ctx, cmd)` directly.
+
+### Step 4: Dispatch commands
+
+Inside your HTTP handler, CLI command, or worker, build the command value and pass it to `bus.Dispatch`:
+
+```go
+err := bus.Dispatch(r.Context(), PlaceOrder{
+	OrderID:    "ord-100",
+	CustomerID: "cust-42",
+	TotalCents: 14900,
+})
+if err != nil {
+	// Handle error or map to transport response.
+}
+```
+
+`Dispatch` looks up the registered handler for `PlaceOrder`, runs any attached middlewares around it, executes `Handle`, and returns the resulting error.
 
 ### Write middlewares
 
-Write middlewares wrap command execution to handle cross-cutting work such as transactions, logging, metrics, or retries. Attach them globally via `command.WithMiddleware(...)`, per command type in `command.Register(bus, handler, mw...)`, or directly via `command.Wrap(handler, mw...)`. Middlewares run **outermost-first** in the order listed (`nil` middlewares are skipped).
+Middlewares wrap command execution to add cross-cutting behavior such as database transactions, logging, tracing, or retries. You can attach middlewares:
 
-Custom middlewares implement `command.Middleware` (`func(next command.UntypedFunc) command.UntypedFunc`). For example, here is a middleware that runs each command inside a database transaction:
+- Globally across a bus via `command.WithMiddleware(mw1, mw2)`
+- Per command route via `command.Register(bus, handler, routeMW...)`
+- Around a standalone handler via `command.Wrap(handler, mw...)`
+- Combined into a reusable middleware via `command.Chain(mw1, mw2)`
+
+Middlewares execute **outermost-first** in the order listed (`nil` entries are skipped): the first middleware listed runs first before the handler and inspects returned errors last.
+
+Custom middlewares implement `command.Middleware` (`func(next command.UntypedFunc) command.UntypedFunc`). For example, here is a middleware wrapping every command inside a SQL transaction:
 
 ```go
 func withTransaction(db *sql.DB) command.Middleware {
@@ -169,10 +188,10 @@ func withTransaction(db *sql.DB) command.Middleware {
 }
 ```
 
-Two write middlewares ship out of the box:
+Two write middlewares are included in `cqrs/command`:
 
-- **`command.ObservabilityMiddleware`**: Assigns a fresh `CommandID` per dispatch and propagates `TraceID` and `CausationID` on `ctx` (see [Observability](#observability)).
-- **`command.RetryMiddleware`**: Retries failures matching `RetryConfig.RetryIf` (such as optimistic concurrency conflicts) using full-jitter exponential backoff up to `MaxAttempts`. Delays are drawn uniformly from `[0, min(BaseBackoff * 2^(attempt-1), MaxBackoff)]`, defaulting `MaxBackoff` to `250ms` and `BaseBackoff` to `min(10ms, MaxBackoff)`. Context cancellation aborts both before starting an attempt and during backoff sleeps.
+- **`command.ObservabilityMiddleware(opts...)`**: Generates a `CommandID` per dispatch and propagates `TraceID` and `CausationID` on `ctx` (see [Observability](#observability)).
+- **`command.RetryMiddleware(cfg)`**: Retries transient errors matching `RetryConfig.RetryIf` using full-jitter exponential backoff up to `MaxAttempts`. Sleep delays are sampled uniformly from `[0, min(BaseBackoff * 2^(attempt-1), MaxBackoff)]`, defaulting `MaxBackoff` to `250ms` and `BaseBackoff` to `min(10ms, MaxBackoff)`. When `RetryIf` is `nil` or `MaxAttempts <= 1`, handlers execute once without retrying. Context cancellation aborts before each attempt and during backoff sleeps.
 
 ```go
 bus, err := command.NewBus(
@@ -191,23 +210,21 @@ bus, err := command.NewBus(
 )
 ```
 
-Mount `ObservabilityMiddleware` **outside** `RetryMiddleware` so retry attempts keep one `CommandID`, and mount transaction middlewares **inside** `RetryMiddleware` so every retry begins in a clean transaction after rollback.
+Mount `ObservabilityMiddleware` **outside** `RetryMiddleware` so retry attempts share one `CommandID`, and mount transaction middlewares **inside** `RetryMiddleware` so each retry starts a clean transaction after rollback.
 
 ### Failure boundaries
 
-Not every failure from a command means the same thing to a caller:
+`command.Bus` separates errors by caller and operational responsibility:
 
-- **Pre-dispatch caller bugs** (`cqrs.ErrNilBus`, `command.ErrNilCommand`, `cqrs.ErrNoHandler`, or an already-canceled `ctx.Err()`) always return immediately before middlewares or handlers execute.
-- **Domain rejections** (`"order already canceled"`, `"insufficient balance"`) are deterministic business outcomes.
-- **Infrastructure faults** (database unreachable, network timeout) indicate operational failures that callers or workers must handle or retry.
-
-Wrap expected rejections inline with `command.Reject(err)` or centrally via `command.WithErrorClassifier` on `command.Bus`, and observe them with `command.WithOnRejected`:
+- **Pre-dispatch errors** (`cqrs.ErrNilBus`, `command.ErrNilCommand`, `cqrs.ErrNoHandler`, or an already-canceled `ctx.Err()`) always return immediately before lookup or middlewares run.
+- **Domain rejections** are expected business-rule refusals (such as `"insufficient balance"` or `"order already canceled"`). Mark them inline with `command.Reject(err)` or centrally on `command.NewBus` using `command.WithErrorClassifier`. Inspect marked errors using `command.IsRejected(err)`.
+- **Infrastructure faults** (database outages, timeouts, network errors) remain unmarked so retries, alerts, and HTTP `500` handling trigger as expected.
 
 ```go
 bus, err := command.NewBus(
 	command.WithMiddleware(command.ObservabilityMiddleware()),
 	command.WithErrorClassifier(func(err error) error {
-		if errors.Is(err, errInsufficientBalance) {
+		if errors.Is(err, errInvalidTotal) {
 			return command.Reject(err)
 		}
 		return err
@@ -222,52 +239,69 @@ bus, err := command.NewBus(
 )
 ```
 
-By default, `command.Bus` masks marked rejections (`WithOnRejected` is called and `Dispatch` returns `nil`) while letting unmarked infrastructure errors surface to the caller. Two alternative policies are available on `command.NewBus`:
+Configure post-lookup failure behavior via `command.NewBus` options:
 
 | Option | Behavior on post-lookup errors | Typical fit |
 | --- | --- | --- |
 | *(default)* Rejection masking | Marked rejections invoke `WithOnRejected` and return `nil`; unmarked errors return untouched | Edge dispatchers separating domain rejections from infra failures |
-| `command.WithStrictOpaqueDispatch(onError)` | Forwards all post-lookup failures to `onError` and always returns `nil` (`ErrNilErrorSink` if `onError` is nil) | Strict boundary handlers where callers never inspect downstream errors |
+| `command.WithStrictOpaqueDispatch(onError)` | Forwards every post-lookup failure to `onError` and always returns `nil` (`command.ErrNilErrorSink` if nil) | Strict boundary callers that must never branch on downstream errors |
 | `command.WithPassthroughErrors()` | Returns every handler and middleware error untouched | HTTP controllers mapping domain errors to status codes, and integration tests |
+
+### Registration rules
+
+- **Exact dynamic type lookup**: Registering value type `PlaceOrder` matches `PlaceOrder{...}` and not `&PlaceOrder{...}`. Pick either value or pointer consistently per command type.
+- **`command.MustRegister`**: Panics on invalid setup (`cqrs.ErrNilBus`, `cqrs.ErrNilHandler`, `cqrs.ErrInvalidMessageType` for interfaces, or `cqrs.ErrDuplicateHandler` when registering a command type twice), convenient during process startup.
+- **Nil messages**: Dispatching an untyped `nil` or typed-nil pointer command fails before execution with `command.ErrNilCommand`.
 
 ## The read side
 
-Queries retrieve data shaped for UIs, API responses, and reports without altering system state. Handlers in `eventsalsa.dev/cqrs/query` return `(R, error)`, and failures returned by handlers or middlewares propagate directly back to callers without rejection masking.
+Queries fetch data shaped for UIs, API responses, and reports without modifying write state. Handlers in `eventsalsa.dev/cqrs/query` implement `query.Handler[Q, R]` (`Handle(ctx context.Context, q Q) (R, error)`) and return errors directly to callers with no rejection masking.
 
-### Executing queries
+### Step 1: Define query and view types
 
-Register each query handler once via `query.Register` (or `query.MustRegister`) and invoke `query.Execute[R](ctx, bus, q)` with the expected return type `R`—Go infers query type `Q` from `q`:
+Define a small input struct carrying query parameters and a response DTO tailored for the caller:
 
 ```go
-type GetOrder struct{ OrderID string }
-type OrderView struct{ OrderID, Status string }
+type GetOrder struct {
+	OrderID string
+}
 
-func readOrderExample(ctx context.Context, views OrderViewReader) (OrderView, error) {
-	qBus, err := query.NewBus(
-		query.WithMiddleware(query.ObservabilityMiddleware()),
-	)
-	if err != nil {
-		return OrderView{}, err
-	}
-
-	query.MustRegister(qBus, query.Func[GetOrder, OrderView](
-		func(ctx context.Context, q GetOrder) (OrderView, error) {
-			return views.LoadOrder(ctx, q.OrderID)
-		},
-	))
-
-	// R (OrderView) is passed once; Q (GetOrder) is inferred from the argument.
-	return query.Execute[OrderView](ctx, qBus, GetOrder{OrderID: "ord-100"})
+type OrderView struct {
+	OrderID string
+	Status  string
 }
 ```
 
-At runtime `query.Execute` verifies that the returned value matches `R`, returning `query.ErrInvalidResultType` if a handler or buggy middleware yields an incompatible type. Returning a typed `nil` pointer maps cleanly to the zero value of `R` without error. If you prefer direct dependency wiring without a bus, use `query.Wrap(handler, mw...)` and call `.Handle(ctx, q)`.
+### Step 2: Register the read handler
+
+Create a `query.Bus` and register a function or struct handler translating `GetOrder` into an `OrderView`:
+
+```go
+qBus, err := query.NewBus()
+if err != nil {
+	return err
+}
+
+if regErr := query.Register(qBus, query.Func[GetOrder, OrderView](
+	func(ctx context.Context, q GetOrder) (OrderView, error) {
+		return views.LoadOrder(ctx, q.OrderID)
+	},
+)); regErr != nil {
+	return regErr
+}
+```
+
+### Step 3: Execute the query
+
+Run the registered query with `query.Execute[R](ctx, bus, q)`, supplying the expected result type `R` (`OrderView`) while Go infers the query type from `q`:
+
+```go
+view, err := query.Execute[OrderView](ctx, qBus, GetOrder{OrderID: "ord-100"})
+```
 
 ### Query middlewares
 
-Query middlewares (`query.Middleware` wrapping `query.UntypedFunc`) run outermost-first around query execution—globally via `query.WithMiddleware(...)`, per query type via `query.Register`, or directly via `query.Wrap`.
-
-Typical read middlewares enforce query timeouts, collect latency metrics, or manage read-only transactions. For example, here is a custom middleware applying a default timeout when a caller context has no deadline:
+Query middlewares (`query.Middleware` wrapping `query.UntypedFunc`) apply cross-cutting read logic—such as default deadlines, caching, or read-only database transactions—and execute outermost-first via `query.WithMiddleware(...)`, per-query `query.Register`, `query.Wrap`, or `query.Chain`:
 
 ```go
 func withDefaultTimeout(d time.Duration) query.Middleware {
@@ -284,7 +318,13 @@ func withDefaultTimeout(d time.Duration) query.Middleware {
 }
 ```
 
-Use **`query.ObservabilityMiddleware()`** to ensure an active `TraceID` exists during standalone read execution without allocating synthetic `CommandID` values or clearing existing causal context.
+Mount **`query.ObservabilityMiddleware(opts...)`** to ensure reads carry a `TraceID` without generating synthetic `CommandID` values or clearing existing causal context.
+
+### Read-side rules
+
+- **Result type verification**: At runtime `query.Execute` verifies that the returned value matches `R`, failing with `query.ErrInvalidResultType` if a buggy middleware returns an incompatible type. Returning a typed `nil` pointer maps cleanly to the zero value of `R`.
+- **Direct handlers**: Call `query.Wrap(handler, mw...)` if you prefer decorating and invoking a single `query.Handler[Q, R]` directly without registering on a `query.Bus`.
+- **Pre-execution checks**: Passing a `nil` bus, `nil` or typed-nil pointer query (`query.ErrNilQuery`), unregistered query type (`cqrs.ErrNoHandler`), interface query type (`cqrs.ErrInvalidMessageType`), or duplicate handler (`cqrs.ErrDuplicateHandler`) fails deterministically (`query.MustRegister` panics on invalid registration).
 
 ## Observability
 
