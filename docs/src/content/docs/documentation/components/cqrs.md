@@ -269,17 +269,24 @@ type GetOrder struct {
 }
 
 type OrderView struct {
-	OrderID string
-	Status  string
+	OrderID    string `json:"order_id"`
+	Status     string `json:"status"`
+	TotalCents int64  `json:"total_cents"`
 }
 ```
 
-Keep SQL formatting, joins, and presentation mapping inside a dedicated read handler backed directly by your projection or view reader:
+Unlike write handlers, queries do not enforce business invariants or rehydrate domain models. Putting a plain SQL statement with `pgx` directly inside the read handler keeps queries simple, transparent, and easy to tune per screen:
 
 ```go
-func newGetOrderHandler(views OrderViewReader) query.Handler[GetOrder, OrderView] {
+func newGetOrderHandler(db *pgxpool.Pool) query.Handler[GetOrder, OrderView] {
 	return query.Func[GetOrder, OrderView](func(ctx context.Context, q GetOrder) (OrderView, error) {
-		return views.LoadOrder(ctx, q.OrderID)
+		var view OrderView
+		err := db.QueryRow(ctx, `
+			SELECT order_id, status, total_cents
+			FROM orders
+			WHERE order_id = $1
+		`, q.OrderID).Scan(&view.OrderID, &view.Status, &view.TotalCents)
+		return view, err
 	})
 }
 ```
@@ -292,7 +299,7 @@ if err != nil {
 	return err
 }
 
-if regErr := query.Register(qBus, newGetOrderHandler(views)); regErr != nil {
+if regErr := query.Register(qBus, newGetOrderHandler(db)); regErr != nil {
 	return regErr
 }
 ```
@@ -314,7 +321,7 @@ func handleGetOrder(qBus *query.Bus) http.HandlerFunc {
 }
 ```
 
-If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, wrap a single handler at startup with `wrapped, err := query.Wrap(newGetOrderHandler(views), mw...)` and pass that `query.Handler[GetOrder, OrderView]` directly into `handleGetOrder` to call `wrapped.Handle(ctx, q)`.
+If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, wrap a single handler at startup with `wrapped, err := query.Wrap(newGetOrderHandler(db), mw...)` and pass that `query.Handler[GetOrder, OrderView]` directly into `handleGetOrder` to call `wrapped.Handle(ctx, q)`.
 
 ### Query bus middlewares
 
