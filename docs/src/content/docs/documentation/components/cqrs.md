@@ -401,6 +401,8 @@ Dedicated `cqrs/persistence` helpers will arrive in a follow-up module. Meanwhil
 - **CQRS without Event Sourcing:** [`cqrs/examples/simple`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/simple)
 - **CQRS with `eventsalsa/store` Event Sourcing:** [`cqrs/examples/event-sourcing`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/event-sourcing)
 
+<!-- TODO(cqrs/persistence): Hidden until cqrs/persistence introduces initial/evolve/decide.
+
 ## Testing
 
 `eventsalsa.dev/cqrs/spectest` provides an in-memory `Given / When / Then` test harness over pure state folding (`initial`, `evolve`) and command decision (`decide`) functions—verifying domain rules in sub-millisecond unit tests with no database setup:
@@ -491,3 +493,5 @@ func TestOrderSpecs(t *testing.T) {
 ```
 
 Use `Then(...)` to assert emitted events (`reflect.DeepEqual`), `ThenNoEvents()` for idempotent no-ops, `ThenState(...)` for resulting state checks, and `ThenError()` / `ThenErrorIs(...)` / `ThenErrorCheck(...)` for expected business rejections.
+
+-->
