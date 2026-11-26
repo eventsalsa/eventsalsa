@@ -129,7 +129,7 @@ if regErr := command.Register(bus, newPlaceOrderHandler(orders)); regErr != nil 
 }
 ```
 
-Inside your HTTP handler, CLI command, or worker, decode the request into `PlaceOrder` and call `bus.Dispatch`. The bus finds the matching handler, runs any configured middlewares around it, executes `Handle`, and returns the resulting error:
+Inside your HTTP handler, CLI command, or worker, decode the request into `PlaceOrder` and call `bus.Dispatch`. The bus finds the matching handler, runs any configured middlewares around it, executes `Handle`, and returns any unmasked error:
 
 ```go
 func handleCheckout(bus *command.Bus) http.HandlerFunc {
@@ -140,17 +140,17 @@ func handleCheckout(bus *command.Bus) http.HandlerFunc {
 			TotalCents: 14900,
 		}
 		if err := bus.Dispatch(r.Context(), cmd); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "command dispatch failed", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusAccepted)
 	}
 }
 ```
 
 If an endpoint prefers receiving an explicit typed dependency instead of routing through a shared bus, wrap a single handler directly at startup with `wrapped, err := command.Wrap(newPlaceOrderHandler(orders), mw...)` and pass that `command.Handler[PlaceOrder]` straight into `handleCheckout` to call `wrapped.Handle(ctx, cmd)`.
 
-### Write middlewares
+### Command bus middlewares
 
 Middlewares wrap command execution to add cross-cutting behavior such as database transactions, logging, tracing, or retries. You can attach middlewares:
 
@@ -241,6 +241,16 @@ Configure post-lookup failure behavior via `command.NewBus` options:
 | `command.WithStrictOpaqueDispatch(onError)` | Forwards every post-lookup failure to `onError` and always returns `nil` (`command.ErrNilErrorSink` if nil) | Strict boundary callers that must never branch on downstream errors |
 | `command.WithPassthroughErrors()` | Returns every handler and middleware error untouched | HTTP controllers mapping domain errors to status codes, and integration tests |
 
+:::tip
+**Why rejection masking is the default**
+
+In CQRS, transport edges such as HTTP handlers, CLI commands, or message consumers work best when kept thin: accept input, build a command, and dispatch it without branching on domain error values.
+
+Returning domain rejections to the edge and switching on them (for instance mapping internal sentinel errors directly to HTTP status codes) tightly couples outer transport layers to application-core internals. It also gets in the way when switching a command from synchronous in-process execution to asynchronous dispatch, because an asynchronous dispatcher cannot wait on downstream rule evaluation anyway. Masking rejections centrally via `WithOnRejected` while surfacing unexpected infrastructure faults keeps your callers ready for both synchronous and async execution.
+:::
+
+<!-- TODO: Expand on transport boundaries and async command dispatch when messaging and Watermill integration are documented. -->
+
 ### Registration rules
 
 - **Exact dynamic type lookup**: Registering value type `PlaceOrder` matches `PlaceOrder{...}` and not `&PlaceOrder{...}`. Pick either value or pointer consistently per command type.
@@ -249,9 +259,9 @@ Configure post-lookup failure behavior via `command.NewBus` options:
 
 ## The read side
 
-Once orders exist, screens and APIs need to show an order's current status without instantiating write models or triggering business validation. On the read side, `eventsalsa.dev/cqrs/query` returns presentation-shaped values (`(R, error)`) straight from storage, passing errors directly back to callers with no rejection masking.
+Once orders exist, screens and APIs need to display an order's current status without loading write-side domain logic or triggering business rules. In CQRS, that read path returns presentation-shaped data (`(R, error)`) via `eventsalsa.dev/cqrs/query`, propagating errors directly back to callers with no rejection masking.
 
-Model the lookup inputs (`GetOrder`) and the exact response structure the caller expects (`OrderView`), then register a thin read handler on `query.Bus` at startup:
+Start by defining a small struct carrying the lookup inputs alongside the exact response shape needed by the screen or endpoint:
 
 ```go
 type GetOrder struct {
@@ -262,25 +272,55 @@ type OrderView struct {
 	OrderID string
 	Status  string
 }
+```
 
-func registerOrderQueries(qBus *query.Bus, views OrderViewReader) error {
-	return query.Register(qBus, query.Func[GetOrder, OrderView](
-		func(ctx context.Context, q GetOrder) (OrderView, error) {
-			return views.LoadOrder(ctx, q.OrderID)
-		},
-	))
+Keep SQL formatting, joins, and presentation mapping inside a dedicated read handler backed directly by your projection or view reader:
+
+```go
+func newGetOrderHandler(views OrderViewReader) query.Handler[GetOrder, OrderView] {
+	return query.Func[GetOrder, OrderView](func(ctx context.Context, q GetOrder) (OrderView, error) {
+		return views.LoadOrder(ctx, q.OrderID)
+	})
 }
 ```
 
-When serving a page or endpoint, call `query.Execute[OrderView]` with the request context, bus, and query value. You specify the expected result type `OrderView` once in brackets so Go can infer `GetOrder` from the argument and return a strongly typed `OrderView`:
+At application startup, create a `query.Bus` and register each query type once so shared read concerns—timeouts, metrics, read-only database transactions, and tracing—apply uniformly across queries:
 
 ```go
-view, err := query.Execute[OrderView](r.Context(), qBus, GetOrder{OrderID: "ord-100"})
+qBus, err := query.NewBus()
+if err != nil {
+	return err
+}
+
+if regErr := query.Register(qBus, newGetOrderHandler(views)); regErr != nil {
+	return regErr
+}
 ```
 
-### Query middlewares
+Inside your HTTP handler or API endpoint, construct `GetOrder` and call `query.Execute[OrderView]`. You provide the expected response type `OrderView` once in brackets while Go infers `GetOrder` from the argument:
 
-Query middlewares (`query.Middleware` wrapping `query.UntypedFunc`) apply cross-cutting read logic—such as default deadlines, caching, or read-only database transactions—and execute outermost-first via `query.WithMiddleware(...)`, per-query `query.Register`, `query.Wrap`, or `query.Chain`:
+```go
+func handleGetOrder(qBus *query.Bus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		view, err := query.Execute[OrderView](r.Context(), qBus, GetOrder{
+			OrderID: r.PathValue("id"),
+		})
+		if err != nil {
+			http.Error(w, "order could not be loaded", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(view)
+	}
+}
+```
+
+If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, wrap a single handler at startup with `wrapped, err := query.Wrap(newGetOrderHandler(views), mw...)` and pass that `query.Handler[GetOrder, OrderView]` directly into `handleGetOrder` to call `wrapped.Handle(ctx, q)`.
+
+### Query bus middlewares
+
+Query middlewares wrap query execution to enforce read timeouts, collect metrics, or manage read-only database transactions. Attach them globally via `query.WithMiddleware(...)`, per query type in `query.Register(qBus, handler, routeMW...)`, around a standalone handler via `query.Wrap(handler, mw...)`, or combined via `query.Chain(mw1, mw2)`. Middlewares execute **outermost-first** (`nil` entries are skipped).
+
+Custom query middlewares implement `query.Middleware` (`func(next query.UntypedFunc) query.UntypedFunc`). For example, here is a middleware applying a default timeout when a caller context has no deadline:
 
 ```go
 func withDefaultTimeout(d time.Duration) query.Middleware {
@@ -297,13 +337,15 @@ func withDefaultTimeout(d time.Duration) query.Middleware {
 }
 ```
 
-Mount **`query.ObservabilityMiddleware(opts...)`** to ensure reads carry a `TraceID` without generating synthetic `CommandID` values or clearing existing causal context.
+One read middleware ships in `cqrs/query`:
 
-### Read-side rules
+- **`query.ObservabilityMiddleware(opts...)`**: Ensures an active `TraceID` exists during query execution without allocating synthetic `CommandID` values or clearing existing causal context.
 
-- **Result type verification**: At runtime `query.Execute` verifies that the returned value matches `R`, failing with `query.ErrInvalidResultType` if a buggy middleware returns an incompatible type. Returning a typed `nil` pointer maps cleanly to the zero value of `R`.
-- **Direct handlers**: Call `query.Wrap(handler, mw...)` if you prefer decorating and invoking a single `query.Handler[Q, R]` directly without registering on a `query.Bus`.
-- **Pre-execution checks**: Passing a `nil` bus, `nil` or typed-nil pointer query (`query.ErrNilQuery`), unregistered query type (`cqrs.ErrNoHandler`), interface query type (`cqrs.ErrInvalidMessageType`), or duplicate handler (`cqrs.ErrDuplicateHandler`) fails deterministically (`query.MustRegister` panics on invalid registration).
+### Execution rules
+
+- **Exact dynamic type lookup**: Registering value type `GetOrder` matches `GetOrder{...}` and not `&GetOrder{...}`. Pick either value or pointer consistently per query type.
+- **Result type verification**: At runtime `query.Execute` verifies that the returned value matches `R`, failing with `query.ErrInvalidResultType` if a buggy middleware yields an incompatible type. Returning a typed `nil` pointer maps cleanly to the zero value of `R`.
+- **Registration and pre-execution checks**: Passing a `nil` bus (`cqrs.ErrNilBus`), `nil` handler (`cqrs.ErrNilHandler`), interface query type (`cqrs.ErrInvalidMessageType`), duplicate query type (`cqrs.ErrDuplicateHandler`), unregistered query (`cqrs.ErrNoHandler`), or `nil` / typed-nil query (`query.ErrNilQuery`) fails deterministically (`query.MustRegister` panics on invalid registration).
 
 ## Observability
 
