@@ -89,11 +89,9 @@ No database migrations or background workers are needed for this module. For com
 
 ## The write side
 
-Write operations represent actions that validate business rules and advance application state—for example placing an order or canceling a subscription. Handlers in `eventsalsa.dev/cqrs/command` return only `error`.
+Imagine building an order checkout service. When a customer submits an order, the service needs to verify the order total is valid, enforce domain rules, and save the new order in your database. In CQRS, that intent to change application state is modeled as a **command** (`eventsalsa.dev/cqrs/command`). Because commands mutate state rather than render screens, write handlers return only `error`.
 
-### Step 1: Define a command
-
-Model each write action as a plain Go struct carrying only the inputs needed to validate rules and perform the change:
+Start by defining the customer's intent as a plain Go struct carrying only the inputs needed to validate rules and make the change:
 
 ```go
 type PlaceOrder struct {
@@ -103,9 +101,7 @@ type PlaceOrder struct {
 }
 ```
 
-### Step 2: Implement a handler
-
-A handler receives `ctx` and the command, enforces business rules, persists state, and returns `nil` or an error. Implement `command.Handler[PlaceOrder]` directly on a struct or adapt a function with `command.Func[PlaceOrder]`:
+Rather than placing business rules inside an HTTP controller or queue consumer, put validation and state persistence inside a command handler so every caller goes through the exact same domain boundary. You can implement `command.Handler[PlaceOrder]` directly on a struct or adapt a function with `command.Func[PlaceOrder]`:
 
 ```go
 var errInvalidTotal = errors.New("order total must be positive")
@@ -120,11 +116,7 @@ func newPlaceOrderHandler(orders OrderRepository) command.Handler[PlaceOrder] {
 }
 ```
 
-Keep business decisions inside write handlers rather than HTTP controllers or transport layers so every caller goes through the exact same validation path.
-
-### Step 3: Create a bus and register the handler
-
-At application startup, create a `command.Bus` and bind each concrete command type to its handler once:
+At application startup, create a `command.Bus` and register each command handler once. One bus acts as the central entry point where cross-cutting concerns—database transactions, logging, retries, and rejection rules—apply uniformly across all commands:
 
 ```go
 bus, err := command.NewBus()
@@ -137,24 +129,26 @@ if regErr := command.Register(bus, newPlaceOrderHandler(orders)); regErr != nil 
 }
 ```
 
-The bus routes each dispatched command to its registered handler and applies shared middlewares and error policies uniformly. If you prefer passing an explicit typed handler directly into a service or HTTP controller without a shared bus, decorate that handler with `command.Wrap(handler, mw...)` and invoke `.Handle(ctx, cmd)` directly.
-
-### Step 4: Dispatch commands
-
-Inside your HTTP handler, CLI command, or worker, build the command value and pass it to `bus.Dispatch`:
+Inside your HTTP handler, CLI command, or worker, decode the request into `PlaceOrder` and call `bus.Dispatch`. The bus finds the matching handler, runs any configured middlewares around it, executes `Handle`, and returns the resulting error:
 
 ```go
-err := bus.Dispatch(r.Context(), PlaceOrder{
-	OrderID:    "ord-100",
-	CustomerID: "cust-42",
-	TotalCents: 14900,
-})
-if err != nil {
-	// Handle error or map to transport response.
+func handleCheckout(bus *command.Bus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cmd := PlaceOrder{
+			OrderID:    "ord-100",
+			CustomerID: "cust-42",
+			TotalCents: 14900,
+		}
+		if err := bus.Dispatch(r.Context(), cmd); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}
 }
 ```
 
-`Dispatch` looks up the registered handler for `PlaceOrder`, runs any attached middlewares around it, executes `Handle`, and returns the resulting error.
+If an endpoint prefers receiving an explicit typed dependency instead of routing through a shared bus, wrap a single handler directly at startup with `wrapped, err := command.Wrap(newPlaceOrderHandler(orders), mw...)` and pass that `command.Handler[PlaceOrder]` straight into `handleCheckout` to call `wrapped.Handle(ctx, cmd)`.
 
 ### Write middlewares
 
@@ -255,11 +249,9 @@ Configure post-lookup failure behavior via `command.NewBus` options:
 
 ## The read side
 
-Queries fetch data shaped for UIs, API responses, and reports without modifying write state. Handlers in `eventsalsa.dev/cqrs/query` implement `query.Handler[Q, R]` (`Handle(ctx context.Context, q Q) (R, error)`) and return errors directly to callers with no rejection masking.
+Once orders exist, screens and APIs need to show an order's current status without instantiating write models or triggering business validation. On the read side, `eventsalsa.dev/cqrs/query` returns presentation-shaped values (`(R, error)`) straight from storage, passing errors directly back to callers with no rejection masking.
 
-### Step 1: Define query and view types
-
-Define a small input struct carrying query parameters and a response DTO tailored for the caller:
+Model the lookup inputs (`GetOrder`) and the exact response structure the caller expects (`OrderView`), then register a thin read handler on `query.Bus` at startup:
 
 ```go
 type GetOrder struct {
@@ -270,33 +262,20 @@ type OrderView struct {
 	OrderID string
 	Status  string
 }
-```
 
-### Step 2: Register the read handler
-
-Create a `query.Bus` and register a function or struct handler translating `GetOrder` into an `OrderView`:
-
-```go
-qBus, err := query.NewBus()
-if err != nil {
-	return err
-}
-
-if regErr := query.Register(qBus, query.Func[GetOrder, OrderView](
-	func(ctx context.Context, q GetOrder) (OrderView, error) {
-		return views.LoadOrder(ctx, q.OrderID)
-	},
-)); regErr != nil {
-	return regErr
+func registerOrderQueries(qBus *query.Bus, views OrderViewReader) error {
+	return query.Register(qBus, query.Func[GetOrder, OrderView](
+		func(ctx context.Context, q GetOrder) (OrderView, error) {
+			return views.LoadOrder(ctx, q.OrderID)
+		},
+	))
 }
 ```
 
-### Step 3: Execute the query
-
-Run the registered query with `query.Execute[R](ctx, bus, q)`, supplying the expected result type `R` (`OrderView`) while Go infers the query type from `q`:
+When serving a page or endpoint, call `query.Execute[OrderView]` with the request context, bus, and query value. You specify the expected result type `OrderView` once in brackets so Go can infer `GetOrder` from the argument and return a strongly typed `OrderView`:
 
 ```go
-view, err := query.Execute[OrderView](ctx, qBus, GetOrder{OrderID: "ord-100"})
+view, err := query.Execute[OrderView](r.Context(), qBus, GetOrder{OrderID: "ord-100"})
 ```
 
 ### Query middlewares
