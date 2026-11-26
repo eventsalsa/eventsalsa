@@ -323,6 +323,14 @@ func handleGetOrder(qBus *query.Bus) http.HandlerFunc {
 
 If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, wrap a single handler at startup with `wrapped, err := query.Wrap(newGetOrderHandler(db), mw...)` and pass that `query.Handler[GetOrder, OrderView]` directly into `handleGetOrder` to call `wrapped.Handle(ctx, q)`.
 
+:::tip
+**Keep query handlers lightweight and disposable**
+
+Query handlers do not guard domain invariants—they exist purely to fetch the data a screen or endpoint needs. Avoid wrapping read operations in shared ORM abstractions or domain models.
+
+Keeping each read handler thin, focused, and easy to rewrite or discard lets you index, reshape, cache, or tune individual read paths independently whenever UI or performance requirements change—without risking write-side logic.
+:::
+
 ### Query bus middlewares
 
 Query middlewares wrap query execution to enforce read timeouts, collect metrics, or manage read-only database transactions. Attach them globally via `query.WithMiddleware(...)`, per query type in `query.Register(qBus, handler, routeMW...)`, around a standalone handler via `query.Wrap(handler, mw...)`, or combined via `query.Chain(mw1, mw2)`. Middlewares execute **outermost-first** (`nil` entries are skipped).
