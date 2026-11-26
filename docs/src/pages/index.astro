@@ -34,6 +34,15 @@ const featureCards = [
 		description:
 			'Standalone envelope encryption for PII and secrets, with crypto-shredding and HMAC hashing for sensitive lookups.',
 	},
+	{
+		name: 'eventsalsa/cqrs',
+		icon: 'alt_route',
+		tone: 'primary',
+		href: `${baseUrl}documentation/components/cqrs/`,
+		description:
+			'Separate write commands from read queries with transport-free buses, middlewares, and observability.',
+		tags: ['Transport-free', 'Command / Query', 'Observability'],
+	},
 ];
 
 const benefits = [
@@ -900,6 +909,7 @@ const projectorCodeLines = [
 	}
 
 	@media (min-width: 48rem) {
+		.feature-grid,
 		.benefit-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
@@ -925,12 +935,14 @@ const projectorCodeLines = [
 			padding-inline: 2rem;
 		}
 
-		.feature-grid {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-		}
-
 		.benefit-grid {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+
+	@media (min-width: 72rem) {
+		.feature-grid {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
 		}
 	}
 
