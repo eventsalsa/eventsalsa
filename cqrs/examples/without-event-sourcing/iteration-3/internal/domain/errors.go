@@ -5,8 +5,6 @@ import "errors"
 var (
 	// ErrInvalidOrderTotal indicates a non-positive order total.
 	ErrInvalidOrderTotal = errors.New("order total must be positive")
-	// ErrOrderNotFound indicates a query or direct lookup found no matching order.
-	ErrOrderNotFound = errors.New("order not found")
 	// ErrAlreadyPlaced indicates the order has already been created.
 	ErrAlreadyPlaced = errors.New("order already placed")
 	// ErrNotPlaced indicates a command targeted an order that has not been placed yet.

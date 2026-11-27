@@ -53,7 +53,7 @@ iteration-2/
 - Uses `command.Func` cleanly at the infra boundary (`internal/infra/acl`) without putting orchestration or business rules inside ACL code.
 - Keeps `internal/domain` purely focused on entity state, invariants, and repository ports.
 - See [`../iteration-1/`](../iteration-1/) if you want plain Go structs with zero translation boilerplate.
-- See [`../iteration-3/`](../iteration-3/) for a functional Decider + generic `application.NewDeciderHandler` tested via `cqrs/spectest`.
+- See [`../iteration-3/`](../iteration-3/) for a pure `internal/domain` Decider + generic `internal/infra/persistence` runner tested via `cqrs/spectest`.
 
 ## Run
 

@@ -1,7 +1,7 @@
 // Package main wires Iteration 3: top-level Protobuf contracts, command.Func ACL
-// translators inside internal/infra/acl, a single generic Decider handler in
-// internal/application, pure Initial/Decide/Evolve domain logic in internal/domain,
-// and state persistence/read handlers inside internal/infra.
+// translators inside internal/infra/acl, generic Decider persistence wiring in
+// internal/infra/persistence, pure Initial/Decide/Evolve domain logic in internal/domain,
+// and state read handlers inside internal/infra/queries.
 package main
 
 import (
@@ -14,7 +14,6 @@ import (
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/application"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/acl"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
@@ -56,21 +55,27 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 		return nil, err
 	}
 
-	placeApp := application.NewDeciderHandler(
-		db,
+	orders := persistence.Decider[domain.Order, any]{
+		Repo:    db,
+		Initial: domain.InitialOrder,
+		Evolve:  domain.EvolveOrder,
+	}
+
+	placeHandler := persistence.NewCommandHandler(
+		orders,
 		func(cmd domain.PlaceOrder) string { return cmd.OrderID },
 		domain.DecidePlaceOrder,
 	)
-	if regErr := command.Register(bus, acl.NewPlaceOrderACL(placeApp)); regErr != nil {
+	if regErr := command.Register(bus, acl.NewPlaceOrderACL(placeHandler)); regErr != nil {
 		return nil, regErr
 	}
 
-	cancelApp := application.NewDeciderHandler(
-		db,
+	cancelHandler := persistence.NewCommandHandler(
+		orders,
 		func(cmd domain.CancelOrder) string { return cmd.OrderID },
 		domain.DecideCancelOrder,
 	)
-	if regErr := command.Register(bus, acl.NewCancelOrderACL(cancelApp)); regErr != nil {
+	if regErr := command.Register(bus, acl.NewCancelOrderACL(cancelHandler)); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil

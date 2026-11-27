@@ -14,8 +14,8 @@ import (
 // ErrTransientWrite simulates a retryable optimistic/serialization conflict.
 var ErrTransientWrite = errors.New("transient database write conflict")
 
-// MemoryDB simulates state-based SQL persistence implementing the Decider's
-// write repository alongside presentation read queries (no event store).
+// MemoryDB simulates state-based SQL persistence implementing StateRepository[domain.Order]
+// alongside direct presentation read queries (no event store).
 type MemoryDB struct {
 	orders        map[string]domain.Order
 	customers     map[string]string
@@ -33,13 +33,15 @@ func NewMemoryDB() *MemoryDB {
 	return db
 }
 
-// Find retrieves stored Order decision state, returning found=false when absent so
-// the caller can initialize state via domain.InitialOrder.
-func (db *MemoryDB) Find(_ context.Context, orderID string) (domain.Order, bool, error) {
+// Load retrieves stored Order decision state, returning ErrNotFound when absent.
+func (db *MemoryDB) Load(_ context.Context, orderID string) (domain.Order, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	order, ok := db.orders[orderID]
-	return order, ok, nil
+	if !ok {
+		return domain.Order{}, ErrNotFound
+	}
+	return order, nil
 }
 
 // Save stores folded Order state, failing once initially to exercise retries cleanly.
@@ -59,7 +61,7 @@ func (db *MemoryDB) SelectOrderSummary(orderID string) (*pbqueries.OrderSummary,
 	defer db.mu.RUnlock()
 	order, ok := db.orders[orderID]
 	if !ok {
-		return nil, domain.ErrOrderNotFound
+		return nil, ErrNotFound
 	}
 	return &pbqueries.OrderSummary{
 		OrderId:      order.ID,

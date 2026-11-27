@@ -7,7 +7,6 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/application"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/acl"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
@@ -100,8 +99,14 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-nil-trace")
 	db := persistence.NewMemoryDB()
 
-	placeACL := acl.NewPlaceOrderACL(application.NewDeciderHandler(
-		db,
+	orders := persistence.Decider[domain.Order, any]{
+		Repo:    db,
+		Initial: domain.InitialOrder,
+		Evolve:  domain.EvolveOrder,
+	}
+
+	placeACL := acl.NewPlaceOrderACL(persistence.NewCommandHandler(
+		orders,
 		func(cmd domain.PlaceOrder) string { return cmd.OrderID },
 		domain.DecidePlaceOrder,
 	))
@@ -109,8 +114,8 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 		t.Fatalf("placeACL(nil) err = %v, want %v", err, acl.ErrEmptyCommand)
 	}
 
-	cancelACL := acl.NewCancelOrderACL(application.NewDeciderHandler(
-		db,
+	cancelACL := acl.NewCancelOrderACL(persistence.NewCommandHandler(
+		orders,
 		func(cmd domain.CancelOrder) string { return cmd.OrderID },
 		domain.DecideCancelOrder,
 	))
