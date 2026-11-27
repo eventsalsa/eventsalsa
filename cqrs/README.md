@@ -157,7 +157,7 @@ spec.Given(OrderPlaced{CustomerID: "cust-42"}).
 Runnable samples live in the standalone [`examples/`](./examples/) sub-module:
 
 - **[`examples/without-event-sourcing/style-1`](./examples/without-event-sourcing/style-1/)** — CQRS without Event Sourcing: exported Go `commands`/`queries` structs, domain invariants, and `internal/application` write handlers
-- **[`examples/without-event-sourcing/style-2`](./examples/without-event-sourcing/style-2/)** — CQRS without Event Sourcing: Protobuf `commands`/`queries` contracts, private domain commands, `command.Func` ACL adapters in `internal/infra/acl`, and `internal/application` write handlers
+- **[`examples/without-event-sourcing/style-2`](./examples/without-event-sourcing/style-2/)** — CQRS without Event Sourcing: Protobuf `commands`/`queries` contracts, `command.Func` ACL adapters in `internal/infra/acl`, thin `internal/application` orchestration, and pure `internal/domain` command handlers
 - **[`examples/event-sourcing`](./examples/event-sourcing/)** — CQRS with Event Sourcing using `eventsalsa/store`, inline projection, and `cqrs/spectest` domain specs
 
 ## Package Layout

@@ -38,6 +38,7 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 		command.WithErrorClassifier(func(err error) error {
 			if errors.Is(err, domain.ErrAlreadyCanceled) ||
 				errors.Is(err, domain.ErrInvalidOrderTotal) ||
+				errors.Is(err, domain.ErrCancellationReasonRequired) ||
 				errors.Is(err, domain.ErrEmptyCommand) {
 				return command.Reject(err)
 			}

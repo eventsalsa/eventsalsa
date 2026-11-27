@@ -49,6 +49,18 @@ func TestStyle2Example(t *testing.T) {
 		t.Fatalf("unexpected view: %+v", view)
 	}
 
+	// Blank reason is classified as a rejection, leaving the order pending.
+	if err := cmdBus.Dispatch(ctx, &commands.CancelOrder{OrderId: "ord-1", Reason: "   "}); err != nil {
+		t.Fatalf("blank-reason CancelOrder should be masked rejection, got: %v", err)
+	}
+	stillPending, err := query.Execute[*queries.OrderSummary](ctx, qBus, &queries.GetOrderSummary{OrderId: "ord-1"})
+	if err != nil {
+		t.Fatalf("Execute after blank-reason cancel: %v", err)
+	}
+	if stillPending.GetStatus() != domain.StatusPending {
+		t.Fatalf("status = %q, want %q", stillPending.GetStatus(), domain.StatusPending)
+	}
+
 	if err := cmdBus.Dispatch(ctx, &commands.CancelOrder{OrderId: "ord-1", Reason: "test"}); err != nil {
 		t.Fatalf("first CancelOrder: %v", err)
 	}

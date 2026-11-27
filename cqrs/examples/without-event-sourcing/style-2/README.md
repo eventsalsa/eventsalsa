@@ -1,8 +1,11 @@
-# Style 2 — Protobuf Contracts, Private Domain Commands & Infra ACL
+# Style 2 — Protobuf Contracts, ACL, Thin Application & Pure Domain Handlers
 
-In Style 2, transport/API contracts live at the top level as generated Protobuf packages (`commands/` and `queries/`), while domain commands (`internal/domain`) remain private inside the module boundary.
+In Style 2, transport/API contracts live at the top level as generated Protobuf packages (`commands/` and `queries/`), while domain commands (`internal/domain`) remain private inside the module boundary and are handled directly by pure, side-effect-free domain functions.
 
-An anti-corruption layer (ACL) in `internal/infra/acl` adapts incoming `*commands.*` Protobuf messages on `command.Bus` into `domain.*` commands using `command.Func` and delegates to `internal/application` write handlers.
+Each write flows through three distinct responsibilities:
+1. **`internal/infra/acl`** translates external `*commands.*` Protobuf payloads on `command.Bus` into private `domain.*` commands using `command.Func`.
+2. **`internal/application`** provides thin use-case orchestration (`Load -> Domain -> Save`), keeping repository/I/O coordination out of both `domain` and `infra`.
+3. **`internal/domain`** executes pure, side-effect-free command handlers (`HandlePlaceOrder`, `HandleCancelOrder`) over `Order` state and returns updated state values without mutating callers or touching persistence.
 
 ## Package Layout
 
@@ -22,13 +25,14 @@ style-2/
 │   ├── order_summary.proto
 │   └── order_summary.pb.go
 └── internal/
-    ├── domain/                              # Business entity, invariants, domain commands, repo port
+    ├── domain/                              # State, invariants, private commands, pure handlers, repo port
     │   ├── errors.go
     │   ├── order.go
-    │   ├── place_order.go
-    │   ├── cancel_order.go
+    │   ├── order_test.go                    # Mock-free tests for pure domain handlers
+    │   ├── place_order.go                   # PlaceOrder + pure HandlePlaceOrder
+    │   ├── cancel_order.go                  # CancelOrder + pure HandleCancelOrder
     │   └── repository.go
-    ├── application/                         # Write-side use case handlers over domain commands
+    ├── application/                         # Thin Load -> Domain -> Save orchestration
     │   ├── place_order_handler.go
     │   └── cancel_order_handler.go
     └── infra/
@@ -44,8 +48,8 @@ style-2/
 ## Why choose Style 2
 
 - Isolates wire/schema evolution (`proto3`) from internal domain models and command payloads.
-- Keeps domain commands private to `internal/` so callers cannot construct internal domain state transitions directly.
-- Uses `command.Func` cleanly at the infra boundary (`internal/infra/acl`) without hiding write business rules inside transport code.
+- Keeps domain commands private to `internal/` and interpreted purely inside `internal/domain` without side effects or mocks.
+- Keeps orchestration (`Get -> Domain -> Save`) explicitly in `internal/application` rather than leaking use-case coordination into `internal/infra/acl`.
 - See [`../style-1/`](../style-1/) if you want plain Go structs with zero translation boilerplate.
 
 ## Run
