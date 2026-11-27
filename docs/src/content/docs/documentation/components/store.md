@@ -39,8 +39,7 @@ Before persistence, you work with `store.Event`. After persistence, the store re
 | `EventVersion` | The schema version of the payload for that event type. |
 | `Payload` | The serialized event body. In the examples below it is JSON, but the field itself is just `[]byte`. |
 | `Metadata` | Cross-cutting metadata such as actor, tenant, request information, or audit context. With the default PostgreSQL schema, JSON bytes are the natural fit here. |
-| `TraceID` | Optional tracing identifier for distributed tracing. |
-| `CorrelationID` | Optional identifier used to group related work across events. |
+| `TraceID` | Optional tracing identifier grouping all hops of an end-to-end execution flow (partially indexed via `idx_events_trace`). |
 | `CausationID` | Optional identifier for the direct cause of this event, often a command ID or upstream event ID. |
 | `EventID` | A unique identifier for the event itself. |
 | `CreatedAt` | The timestamp carried with the event. |
@@ -96,7 +95,7 @@ If two requests both load an order at version `7`, one of them can win and appen
 
 `eventsalsa/store` enforces optimistic concurrency by atomically checking and reserving the version range on the `stream_heads` table inside the caller's transaction before inserting any events:
 
-1. **`NoStream()` / `Exact(0)`**: Executes an `INSERT INTO stream_heads (stream_type, stream_id, stream_version, updated_at) VALUES ($1, $2, $numEvents, NOW())`. If the stream head row already exists, PostgreSQL raises a primary key conflict on `(stream_type, stream_id)`, which the store translates to `store.ErrOptimisticConcurrency`.
+1. **`NoStream()` / `Exact(0)`**: Executes an `INSERT INTO stream_heads (stream_type, stream_id, stream_version, updated_at) VALUES ($1, $2, $numEvents, NOW()) ON CONFLICT (stream_type, stream_id) DO NOTHING`. If the stream head row already exists, zero rows are affected and the store returns `store.ErrOptimisticConcurrency` without aborting the caller's transaction.
 2. **`Exact(n)`**: Executes an `UPDATE stream_heads SET stream_version = stream_version + $numEvents, updated_at = NOW() WHERE stream_type = $1 AND stream_id = $2 AND stream_version = $n`. If the stream does not exist or its current version does not match `n`, zero rows are updated and the store returns `store.ErrOptimisticConcurrency`.
 3. **`Any()`**: Executes an atomic UPSERT (`INSERT INTO stream_heads ... ON CONFLICT (stream_type, stream_id) DO UPDATE SET stream_version = stream_heads.stream_version + EXCLUDED.stream_version RETURNING stream_version`), allocating consecutive version numbers even under concurrent writes.
 
@@ -123,9 +122,8 @@ import (
 )
 
 type CommandMetadata struct {
-	CommandID     string
-	CorrelationID string
-	TraceID       string
+	CommandID string
+	TraceID   string
 }
 
 type OrderRepository struct {
@@ -139,7 +137,6 @@ func (r *OrderRepository) Save(ctx context.Context, order *Order, meta CommandMe
 		order.ID,
 		order.PendingEvents(),
 		orderes.WithCausationID(meta.CommandID),
-		orderes.WithCorrelationID(meta.CorrelationID),
 		orderes.WithTraceID(meta.TraceID),
 	)
 	if err != nil {
@@ -227,8 +224,10 @@ The domain layer should own the event structs themselves, but it should not need
 The generated package includes generic helpers such as:
 
 - `EventTypeOf(...)`
+- `MarshalEvent(...)`
 - `ToESEvents(...)`
 - `FromESEvent(...)`
+- `FromESEventAs[T](...)`
 - `FromESEvents(...)`
 
 It also emits per-event helpers such as `ToOrderPlacedV1(...)` and `FromOrderPlacedV1(...)`.
@@ -244,7 +243,6 @@ events, err := orderes.ToESEvents(
 		orderv1.OrderLineAdded{SKU: "sku-coffee-grinder", Quantity: 1, UnitPriceCents: 12900},
 	},
 	orderes.WithTraceID(traceID),
-	orderes.WithCorrelationID(correlationID),
 	orderes.WithCausationID(commandID),
 )
 ```

@@ -126,3 +126,33 @@ func TestExpectedVersion_Exact_Zero(t *testing.T) {
 		t.Error("Expected Exact(0) to be equal to NoStream()")
 	}
 }
+
+func TestExpectedVersion_Matches(t *testing.T) {
+	tests := []struct {
+		name    string
+		ev      ExpectedVersion
+		current int64
+		want    bool
+	}{
+		{name: "Any rejects negative version", ev: Any(), current: -1, want: false},
+		{name: "Any matches version 0", ev: Any(), current: 0, want: true},
+		{name: "Any matches positive version", ev: Any(), current: 42, want: true},
+		{name: "NoStream rejects negative version", ev: NoStream(), current: -1, want: false},
+		{name: "NoStream matches version 0", ev: NoStream(), current: 0, want: true},
+		{name: "NoStream rejects version 1", ev: NoStream(), current: 1, want: false},
+		{name: "Exact(0) matches version 0", ev: Exact(0), current: 0, want: true},
+		{name: "Exact(0) rejects version 1", ev: Exact(0), current: 1, want: false},
+		{name: "Exact(5) rejects version 0", ev: Exact(5), current: 0, want: false},
+		{name: "Exact(5) rejects version 4", ev: Exact(5), current: 4, want: false},
+		{name: "Exact(5) matches version 5", ev: Exact(5), current: 5, want: true},
+		{name: "Exact(5) rejects version 6", ev: Exact(5), current: 6, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.ev.Matches(tt.current); got != tt.want {
+				t.Errorf("%s.Matches(%d) = %v, want %v", tt.ev, tt.current, got, tt.want)
+			}
+		})
+	}
+}

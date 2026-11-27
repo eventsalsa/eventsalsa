@@ -3,26 +3,27 @@ module eventsalsa.dev/encryption/kek/gcpkms
 go 1.27.4
 
 require (
-	cloud.google.com/go/kms v1.35.0
+	cloud.google.com/go/kms v1.37.0
 	eventsalsa.dev/encryption v0.1.0
-	github.com/googleapis/gax-go/v2 v2.23.0
-	google.golang.org/protobuf v1.36.11
+	github.com/googleapis/gax-go/v2 v2.27.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
-	cloud.google.com/go/longrunning v1.2.0 // indirect
+	cloud.google.com/go/longrunning v1.5.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel v1.44.0 // indirect
-	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
-	google.golang.org/api v0.287.1 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
+	google.golang.org/api v0.304.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 )

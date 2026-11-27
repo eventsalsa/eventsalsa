@@ -48,7 +48,7 @@ func main() {
 		userID,
 		v1Events,
 		persistence.WithTraceID("trace-123"),
-		persistence.WithCorrelationID("corr-456"),
+		persistence.WithCausationID("cmd-456"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to convert v1 events: %v", err)
@@ -246,7 +246,7 @@ func main() {
 	fmt.Println("  - Use FromESEvent() in projection handlers to convert individual events")
 	fmt.Println("  - FromESEvents() is useful for batch processing or loading stream state")
 	fmt.Println("  - Type-safe helpers (ToXxxVn/FromXxxVn) for specific event versions")
-	fmt.Println("  - Options pattern for metadata injection (trace/correlation/causation IDs)")
+	fmt.Println("  - Options pattern for metadata injection (trace/causation IDs)")
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  1. Modify domain events in domain/user/events/")

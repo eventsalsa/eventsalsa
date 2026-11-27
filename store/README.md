@@ -140,7 +140,6 @@ event := store.Event{
     CreatedAt:     time.Now(),
     // optional tracing fields:
     TraceID:       store.NullString{String: traceID, Valid: true},
-    CorrelationID: store.NullString{String: corrID, Valid: true},
     CausationID:   store.NullString{String: causID, Valid: true},
 }
 ```

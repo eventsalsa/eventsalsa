@@ -44,7 +44,6 @@ func TestGeneratePostgres(t *testing.T) {
 		"event_version INT NOT NULL DEFAULT 1",
 		"payload BYTEA NOT NULL",
 		"trace_id TEXT",
-		"correlation_id TEXT",
 		"causation_id TEXT",
 		"metadata JSONB",
 		"created_at TIMESTAMPTZ NOT NULL",
@@ -61,7 +60,7 @@ func TestGeneratePostgres(t *testing.T) {
 	requiredIndexes := []string{
 		"idx_events_stream",
 		"idx_events_event_type",
-		"idx_events_correlation",
+		"idx_events_trace",
 		"idx_events_stream_type_position",
 		"idx_events_transaction_position",
 	}
@@ -70,6 +69,14 @@ func TestGeneratePostgres(t *testing.T) {
 		if !strings.Contains(sql, idx) {
 			t.Errorf("Generated SQL missing index: %s", idx)
 		}
+	}
+
+	// Verify correlation_id column and index are NOT present (removed)
+	if strings.Contains(sql, "correlation_id") {
+		t.Error("Generated SQL should not contain correlation_id (removed)")
+	}
+	if strings.Contains(sql, "idx_events_correlation") {
+		t.Error("Generated SQL should not contain idx_events_correlation (removed)")
 	}
 
 	// Verify bounded_context is NOT present (removed)
@@ -183,6 +190,12 @@ func TestGeneratePostgres_NativePartitioning(t *testing.T) {
 	if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS stream_heads") {
 		t.Error("Missing stream_heads table in partitioned SQL")
 	}
+	if !strings.Contains(sql, "idx_events_trace") {
+		t.Error("Missing idx_events_trace in native partitioned SQL")
+	}
+	if strings.Contains(sql, "correlation_id") || strings.Contains(sql, "idx_events_correlation") {
+		t.Error("Native partitioned SQL should not contain correlation_id")
+	}
 }
 
 func TestGeneratePostgres_Partman_PgCron(t *testing.T) {
@@ -237,6 +250,12 @@ func TestGeneratePostgres_Partman_PgCron(t *testing.T) {
 	}
 	if !strings.Contains(sql, "SELECT cron.schedule('partman-maintenance-events', '0 * * * *', $$CALL partman.run_maintenance_proc()$$);") {
 		t.Error("Missing cron.schedule call for partman maintenance")
+	}
+	if !strings.Contains(sql, "idx_events_trace") {
+		t.Error("Missing idx_events_trace in partman SQL")
+	}
+	if strings.Contains(sql, "correlation_id") || strings.Contains(sql, "idx_events_correlation") {
+		t.Error("Partman SQL should not contain correlation_id")
 	}
 }
 
