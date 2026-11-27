@@ -5,6 +5,7 @@ package infra
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"eventsalsa.dev/store"
@@ -17,23 +18,15 @@ import (
 type Option func(*eventOptions)
 
 type eventOptions struct {
-	causationID   store.NullString
-	correlationID store.NullString
-	traceID       store.NullString
-	metadata      []byte
+	causationID store.NullString
+	traceID     store.NullString
+	metadata    []byte
 }
 
 // WithCausationID sets the causation ID for the event.
 func WithCausationID(id string) Option {
 	return func(o *eventOptions) {
 		o.causationID = store.NullString{String: id, Valid: true}
-	}
-}
-
-// WithCorrelationID sets the correlation ID for the event.
-func WithCorrelationID(id string) Option {
-	return func(o *eventOptions) {
-		o.correlationID = store.NullString{String: id, Valid: true}
 	}
 }
 
@@ -60,8 +53,27 @@ func EventTypeOf(e any) (string, error) {
 	case events.OrderPlaced, *events.OrderPlaced:
 		return "OrderPlaced", nil
 	default:
-		return "", fmt.Errorf("unknown event type: %T", e)
+		return "", fmt.Errorf("%w: unknown event type %T", store.ErrUnknownEvent, e)
 	}
+}
+
+// MarshalEvent serializes a domain event into its event type, schema version, and JSON payload.
+func MarshalEvent(e any) (eventType string, version int, payload []byte, err error) {
+	if rv := reflect.ValueOf(e); !rv.IsValid() || (rv.Kind() == reflect.Pointer && rv.IsNil()) {
+		return "", 0, nil, fmt.Errorf("%w: cannot marshal nil event %T", store.ErrUnknownEvent, e)
+	}
+
+	eventType, err = EventTypeOf(e)
+	if err != nil {
+		return "", 0, nil, err
+	}
+
+	payload, err = json.Marshal(e)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("failed to marshal event %s: %w", eventType, err)
+	}
+
+	return eventType, getEventVersion(e), payload, nil
 }
 
 // ToESEvents converts domain events to store.Event instances.
@@ -76,6 +88,10 @@ func ToESEvents[T any](streamType string, streamID string, events []T, opts ...O
 	result := make([]store.Event, 0, len(events))
 
 	for _, e := range events {
+		if rv := reflect.ValueOf(e); !rv.IsValid() || (rv.Kind() == reflect.Pointer && rv.IsNil()) {
+			return nil, fmt.Errorf("%w: cannot marshal nil event %T", store.ErrUnknownEvent, e)
+		}
+
 		eventType, err := EventTypeOf(e)
 		if err != nil {
 			return nil, err
@@ -94,17 +110,16 @@ func ToESEvents[T any](streamType string, streamID string, events []T, opts ...O
 		version := getEventVersion(e)
 
 		event := store.Event{
-			StreamType:    streamType,
-			StreamID:      streamID,
-			EventType:     eventType,
-			EventVersion:  version,
-			EventID:       uuid.New(),
-			Payload:       payload,
-			Metadata:      metadata,
-			CausationID:   options.causationID,
-			CorrelationID: options.correlationID,
-			TraceID:       options.traceID,
-			CreatedAt:     time.Now(),
+			StreamType:   streamType,
+			StreamID:     streamID,
+			EventType:    eventType,
+			EventVersion: version,
+			EventID:      uuid.New(),
+			Payload:      payload,
+			Metadata:     metadata,
+			CausationID:  options.causationID,
+			TraceID:      options.traceID,
+			CreatedAt:    time.Now(),
 		}
 
 		result = append(result, event)
@@ -162,7 +177,7 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 			}
 			return e, nil
 		default:
-			return nil, fmt.Errorf("unknown version %d for event type OrderConfirmed", pe.EventVersion)
+			return nil, fmt.Errorf("%w: unknown version %d for event type OrderConfirmed", store.ErrUnknownEvent, pe.EventVersion)
 		}
 	case "OrderPlaced":
 		switch pe.EventVersion {
@@ -173,11 +188,33 @@ func FromESEvent(pe store.PersistedEvent) (any, error) {
 			}
 			return e, nil
 		default:
-			return nil, fmt.Errorf("unknown version %d for event type OrderPlaced", pe.EventVersion)
+			return nil, fmt.Errorf("%w: unknown version %d for event type OrderPlaced", store.ErrUnknownEvent, pe.EventVersion)
 		}
 	default:
-		return nil, fmt.Errorf("unknown event type: %s", pe.EventType)
+		return nil, fmt.Errorf("%w: unknown event type %s", store.ErrUnknownEvent, pe.EventType)
 	}
+}
+
+// FromESEventAs converts a persisted event into a domain event of type T.
+// T must be 'any' or an interface/concrete type assignable from the decoded domain event.
+//
+//nolint:gocritic // hugeParam: matches store.PersistedEvent value contract
+func FromESEventAs[T any](pe store.PersistedEvent) (T, error) {
+	var zero T
+	domainEvent, err := FromESEvent(pe)
+	if err != nil {
+		return zero, err
+	}
+
+	typedEvent, ok := domainEvent.(T)
+	if !ok {
+		return zero, fmt.Errorf(
+			"event %s v%d has type %T, want %s",
+			pe.EventType, pe.EventVersion, domainEvent, reflect.TypeFor[T](),
+		)
+	}
+
+	return typedEvent, nil
 }
 
 // ToOrderConfirmedV1 converts a domain event to a store.Event.
@@ -198,17 +235,16 @@ func ToOrderConfirmedV1(streamType string, streamID string, e events.OrderConfir
 	}
 
 	return store.Event{
-		StreamType:    streamType,
-		StreamID:      streamID,
-		EventType:     "OrderConfirmed",
-		EventVersion:  1,
-		EventID:       uuid.New(),
-		Payload:       payload,
-		Metadata:      metadata,
-		CausationID:   options.causationID,
-		CorrelationID: options.correlationID,
-		TraceID:       options.traceID,
-		CreatedAt:     time.Now(),
+		StreamType:   streamType,
+		StreamID:     streamID,
+		EventType:    "OrderConfirmed",
+		EventVersion: 1,
+		EventID:      uuid.New(),
+		Payload:      payload,
+		Metadata:     metadata,
+		CausationID:  options.causationID,
+		TraceID:      options.traceID,
+		CreatedAt:    time.Now(),
 	}, nil
 }
 
@@ -248,17 +284,16 @@ func ToOrderPlacedV1(streamType string, streamID string, e events.OrderPlaced, o
 	}
 
 	return store.Event{
-		StreamType:    streamType,
-		StreamID:      streamID,
-		EventType:     "OrderPlaced",
-		EventVersion:  1,
-		EventID:       uuid.New(),
-		Payload:       payload,
-		Metadata:      metadata,
-		CausationID:   options.causationID,
-		CorrelationID: options.correlationID,
-		TraceID:       options.traceID,
-		CreatedAt:     time.Now(),
+		StreamType:   streamType,
+		StreamID:     streamID,
+		EventType:    "OrderPlaced",
+		EventVersion: 1,
+		EventID:      uuid.New(),
+		Payload:      payload,
+		Metadata:     metadata,
+		CausationID:  options.causationID,
+		TraceID:      options.traceID,
+		CreatedAt:    time.Now(),
 	}, nil
 }
 

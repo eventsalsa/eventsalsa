@@ -12,34 +12,35 @@ import (
 const streamTypeOrder = "Order"
 
 // OrderEventStore implements application.OrderEventStore using eventsalsa/store,
-// eventmap-gen mappings, and an inline PostgreSQL read-model projection inside the tx.
+// eventmap-gen mappings, and an optional inline projection inside the write transaction.
 type OrderEventStore struct {
-	Store *storepostgres.Store
+	Store      *storepostgres.Store
+	Projection *OrderOverviewProjection
 }
 
-// Load reads the order stream from eventsalsa/store and folds it into OrderState.
-func (s *OrderEventStore) Load(ctx context.Context, orderID string) (domain.OrderState, int64, error) {
+// Load reads the order stream from eventsalsa/store and folds it into Order.
+func (s *OrderEventStore) Load(ctx context.Context, orderID string) (domain.Order, int64, error) {
 	tx, err := txFromContext(ctx)
 	if err != nil {
-		return domain.OrderState{}, 0, err
+		return domain.Order{}, 0, err
 	}
 	stream, err := s.Store.ReadStream(ctx, tx, streamTypeOrder, orderID, nil, nil)
 	if err != nil {
-		return domain.OrderState{}, 0, err
+		return domain.Order{}, 0, err
 	}
-	state := domain.InitialOrder(orderID)
+	order := domain.InitialOrder(orderID)
 	for i := range stream.Events {
 		domainEv, decErr := FromESEvent(stream.Events[i])
 		if decErr != nil {
-			return domain.OrderState{}, 0, decErr
+			return domain.Order{}, 0, decErr
 		}
-		state = domain.EvolveOrder(state, domainEv)
+		order = domain.EvolveOrder(order, domainEv)
 	}
-	return state, stream.Version(), nil
+	return order, stream.Version(), nil
 }
 
 // Append maps domain events via eventmap-gen, appends them optimistically to eventsalsa/store,
-// and updates order_overview_v1 atomically in the same transaction.
+// and triggers any configured inline projection atomically in the same transaction.
 func (s *OrderEventStore) Append(
 	ctx context.Context,
 	orderID string,
@@ -72,5 +73,12 @@ func (s *OrderEventStore) Append(
 	if err != nil {
 		return err
 	}
-	return projectInline(ctx, tx, res.Events)
+	if s.Projection != nil {
+		for i := range res.Events {
+			if projErr := s.Projection.Handle(ctx, tx, res.Events[i]); projErr != nil {
+				return projErr
+			}
+		}
+	}
+	return nil
 }

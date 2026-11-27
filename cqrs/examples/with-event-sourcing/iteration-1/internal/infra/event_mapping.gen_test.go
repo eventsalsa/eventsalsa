@@ -66,6 +66,27 @@ func TestEventTypeOf(t *testing.T) {
 	}
 }
 
+// TestMarshalEvent tests the MarshalEvent function.
+func TestMarshalEvent(t *testing.T) {
+	eventType, version, payload, err := MarshalEvent(events.OrderConfirmed{})
+	if err != nil {
+		t.Fatalf("MarshalEvent() failed: %v", err)
+	}
+	if eventType != "OrderConfirmed" {
+		t.Errorf("EventType = %s, want %s", eventType, "OrderConfirmed")
+	}
+	if version != 1 {
+		t.Errorf("EventVersion = %d, want %d", version, 1)
+	}
+	if len(payload) == 0 {
+		t.Error("Payload should not be empty")
+	}
+
+	if _, _, _, err := MarshalEvent(struct{}{}); err == nil {
+		t.Error("Expected error for unknown event type")
+	}
+}
+
 // TestToESEvents tests the ToESEvents function with generics.
 func TestToESEvents(t *testing.T) {
 	streamType := "TestStream"
@@ -142,6 +163,41 @@ func TestFromESEvents(t *testing.T) {
 	}
 }
 
+// TestFromESEventAs tests the generic FromESEventAs helper function.
+func TestFromESEventAs(t *testing.T) {
+	pe := store.PersistedEvent{
+		CreatedAt:      time.Now(),
+		StreamType:     "TestStream",
+		EventType:      "OrderConfirmed",
+		StreamID:       uuid.New().String(),
+		Payload:        []byte("{}"),
+		Metadata:       []byte("{}"),
+		GlobalPosition: 1,
+		StreamVersion:  1,
+		EventVersion:   1,
+		EventID:        uuid.New(),
+	}
+
+	typed, err := FromESEventAs[events.OrderConfirmed](pe)
+	if err != nil {
+		t.Fatalf("FromESEventAs concrete type failed: %v", err)
+	}
+	_ = typed
+
+	anyEvent, err := FromESEventAs[any](pe)
+	if err != nil {
+		t.Fatalf("FromESEventAs[any] failed: %v", err)
+	}
+	if _, ok := anyEvent.(events.OrderConfirmed); !ok {
+		t.Errorf("Expected %T, got %T", events.OrderConfirmed{}, anyEvent)
+	}
+
+	type wrongEvent struct{}
+	if _, err := FromESEventAs[wrongEvent](pe); err == nil {
+		t.Error("Expected error when target type mismatches decoded event")
+	}
+}
+
 // TestOptions tests the Options pattern.
 func TestOptions(t *testing.T) {
 	streamType := "TestStream"
@@ -155,7 +211,6 @@ func TestOptions(t *testing.T) {
 		streamID,
 		[]events.OrderConfirmed{domainEvent},
 		WithCausationID("causation-123"),
-		WithCorrelationID("correlation-456"),
 		WithTraceID("trace-789"),
 		WithMetadata([]byte("{\"key\":\"value\"}")),
 	)
@@ -172,9 +227,6 @@ func TestOptions(t *testing.T) {
 	// Verify options were applied
 	if !esEvent.CausationID.Valid || esEvent.CausationID.String != "causation-123" {
 		t.Errorf("CausationID not set correctly: got %v", esEvent.CausationID)
-	}
-	if !esEvent.CorrelationID.Valid || esEvent.CorrelationID.String != "correlation-456" {
-		t.Errorf("CorrelationID not set correctly: got %v", esEvent.CorrelationID)
 	}
 	if !esEvent.TraceID.Valid || esEvent.TraceID.String != "trace-789" {
 		t.Errorf("TraceID not set correctly: got %v", esEvent.TraceID)
@@ -213,7 +265,6 @@ func TestTypeHelpers(t *testing.T) {
 		Payload:        esEvent.Payload,
 		Metadata:       esEvent.Metadata,
 		CausationID:    esEvent.CausationID,
-		CorrelationID:  esEvent.CorrelationID,
 		TraceID:        esEvent.TraceID,
 		GlobalPosition: 1,
 		StreamVersion:  1,

@@ -15,12 +15,12 @@ type placeSpec struct {
 
 type confirmSpec struct{}
 
-func decidePlaceSpec(s domain.OrderState, in placeSpec) ([]any, error) {
-	return domain.Place(s, in.customerID, in.totalCents)
+func decidePlaceSpec(o domain.Order, in placeSpec) ([]any, error) {
+	return domain.Place(o, in.customerID, in.totalCents)
 }
 
-func decideConfirmSpec(s domain.OrderState, _ confirmSpec) ([]any, error) {
-	return domain.Confirm(s)
+func decideConfirmSpec(o domain.Order, _ confirmSpec) ([]any, error) {
+	return domain.Confirm(o)
 }
 
 func TestOrderDomainSpecs(t *testing.T) {
@@ -30,9 +30,9 @@ func TestOrderDomainSpecs(t *testing.T) {
 
 	spec.When("ord-1", placeSpec{customerID: "cust-42", totalCents: 12900}, decidePlaceSpec).
 		Then(events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900}).
-		ThenState(func(s domain.OrderState) {
-			if !s.Placed || s.TotalCents != 12900 {
-				t.Fatalf("unexpected state: %+v", s)
+		ThenState(func(o domain.Order) {
+			if !o.Placed || o.TotalCents != 12900 {
+				t.Fatalf("unexpected order: %+v", o)
 			}
 		})
 

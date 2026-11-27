@@ -14,9 +14,9 @@ iteration-1/
 │   ├── get_order_overview.go
 │   └── order_overview.go
 └── internal/
-    ├── domain/                          # Pure OrderState & decision rules (zero store/pgx imports)
+    ├── domain/                          # Pure Order aggregate & decision rules (zero store/pgx imports)
     │   ├── errors.go
-    │   ├── order.go                     # OrderState, InitialOrder, EvolveOrder, Place, Confirm
+    │   ├── order.go                     # Order, InitialOrder, EvolveOrder, Place, Confirm
     │   ├── order_test.go                # Given/When/Then specs via cqrs/spectest
     │   └── events/                      # Pure event structs scanned by eventmap-gen
     │       ├── order_placed.go
@@ -31,7 +31,7 @@ iteration-1/
         ├── event_mapping.gen_test.go    # Generated mapping tests
         ├── tx.go                        # WithPgxTx middleware & tx context helpers
         ├── schema.go                    # eventsalsa/store DDL + order_overview_v1 table DDL
-        ├── projection.go                # Inline SQL projection updating order_overview_v1 in tx
+        ├── projection.go                # OrderOverviewProjection (projector.Projection shape, called inline)
         ├── order_event_store.go         # OrderEventStore backed by storepostgres.Store
         └── get_order_overview_handler.go# Thin SQL read handler querying order_overview_v1
 ```

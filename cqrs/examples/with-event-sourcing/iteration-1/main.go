@@ -1,11 +1,11 @@
 // Package main demonstrates CQRS combined with Event Sourcing over eventsalsa/store.
 //
 // Top-level commands/ and queries/ export plain Go contracts; internal/domain holds
-// pure InitialOrder/EvolveOrder/Place/Confirm rules over internal/domain/events;
+// pure InitialOrder/EvolveOrder/Place/Confirm rules on Order over internal/domain/events;
 // internal/application orchestrates writes through OrderEventStore; and internal/infra
 // executes commands inside a PostgreSQL transaction middleware, maps events via
-// eventmap-gen, appends them with optimistic concurrency + causal metadata, and projects
-// inline into order_overview_v1.
+// eventmap-gen, appends them with optimistic concurrency + causal metadata, and runs
+// OrderOverviewProjection inline into order_overview_v1.
 package main
 
 import (
@@ -54,7 +54,10 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		return nil, err
 	}
 
-	orders := &infra.OrderEventStore{Store: es}
+	orders := &infra.OrderEventStore{
+		Store:      es,
+		Projection: &infra.OrderOverviewProjection{},
+	}
 	if regErr := command.Register(bus, &application.PlaceOrderHandler{Orders: orders}); regErr != nil {
 		return nil, regErr
 	}
