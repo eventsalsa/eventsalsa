@@ -12,8 +12,8 @@ import (
 	infrapersistence "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/persistence"
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/queries"
 	"eventsalsa.dev/cqrs/persistence"
+	"eventsalsa.dev/cqrs/persistence/postgres"
 	"eventsalsa.dev/cqrs/query"
-	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
 )
 
@@ -59,8 +59,7 @@ func openApp(ctx context.Context, dsn string) (*wiredApp, error) {
 }
 
 func isRetryableError(err error) bool {
-	return errors.Is(err, persistence.ErrConcurrencyConflict) ||
-		errors.Is(err, store.ErrOptimisticConcurrency)
+	return postgres.IsConcurrencyConflict(err)
 }
 
 func classifyDomainError(err error) error {
@@ -104,6 +103,10 @@ func registerCommandHandlers(bus *command.Bus, repo persistence.EventRepository[
 }
 
 func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
+	// Narrow transactions by default: postgres.NewEventRepository reads in a short pgx.ReadOnly
+	// transaction before decide runs and writes inside a short tx bounded strictly to Append +
+	// inline projections. Add postgres.MustTxMiddleware(pool) here only when wide multi-stream
+	// transactions are required.
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -111,7 +114,6 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 				MaxAttempts: 3,
 				RetryIf:     isRetryableError,
 			}),
-			infrapersistence.WithPgxTx(pool),
 		),
 		command.WithErrorClassifier(classifyDomainError),
 	)
@@ -119,9 +121,22 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		return nil, err
 	}
 
-	orders := &infrapersistence.OrderRepository{
-		Store:      es,
-		Projection: &infrapersistence.OrderOverviewProjection{},
+	codec, err := postgres.NewEventMapCodec(
+		infrapersistence.MarshalEvent,
+		infrapersistence.FromESEventAs[any],
+	)
+	if err != nil {
+		return nil, err
+	}
+	orders, err := postgres.NewEventRepository(postgres.EventRepositoryConfig[any]{
+		DB:          pool,
+		EventStore:  es,
+		StreamType:  "Order",
+		Codec:       codec,
+		Projections: []postgres.Projection{&infrapersistence.OrderOverviewProjection{}},
+	})
+	if err != nil {
+		return nil, err
 	}
 	if regErr := registerCommandHandlers(bus, orders); regErr != nil {
 		return nil, regErr

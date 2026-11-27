@@ -10,5 +10,6 @@ use (
 	./encryption/examples
 	./cqrs
 	./cqrs/persistence
+	./cqrs/persistence/postgres
 	./cqrs/examples
 )

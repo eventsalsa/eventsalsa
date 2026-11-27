@@ -1,7 +1,8 @@
 .PHONY: help check test test-unit test-integration lint fmt fmt-check vet gosec govulncheck build
 
-SUBMODULES := persistence examples
-SECURITY_SUBMODULES := persistence
+SUBMODULES := persistence persistence/postgres examples
+SECURITY_SUBMODULES := persistence persistence/postgres
+ROOT_CONFIG := $(abspath $(CURDIR)/../.golangci.yml)
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -19,8 +20,9 @@ test-unit: ## Run unit tests across cqrs and examples
 		go test -C "$$mod" -v -race -count=1 ./... || exit 1; \
 	done
 
-test-integration: ## Run in-process CQRS pipeline integration tests
+test-integration: ## Run in-process CQRS and PostgreSQL persistence integration tests
 	go test -p 1 -v -race -count=1 -tags=integration ./integration_test/...
+	$(MAKE) -C persistence/postgres test-integration
 
 vet: ## Run go vet across cqrs and examples
 	go vet ./...
@@ -29,9 +31,9 @@ vet: ## Run go vet across cqrs and examples
 	done
 
 lint: ## Run linter across cqrs and examples
-	golangci-lint run --config=../.golangci.yml --timeout=5m ./...
+	golangci-lint run --config="$(ROOT_CONFIG)" --timeout=5m ./...
 	@for mod in $(SUBMODULES); do \
-		(cd "$$mod" && golangci-lint run --config=../../.golangci.yml --timeout=5m ./...) || exit 1; \
+		(cd "$$mod" && golangci-lint run --config="$(ROOT_CONFIG)" --timeout=5m ./...) || exit 1; \
 	done
 
 fmt: ## Format code across cqrs and examples
@@ -46,7 +48,11 @@ gosec: ## Run gosec security scanner (published modules only)
 	rm -f "$$tmp"
 	@for mod in $(SECURITY_SUBMODULES); do \
 		tmp=$$(mktemp --suffix=.sarif); \
-		(cd "$$mod" && gosec -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
+		extra=""; \
+		if [ "$$mod" = "persistence" ]; then \
+			extra="-exclude-dir=postgres"; \
+		fi; \
+		(cd "$$mod" && gosec $$extra -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \
 	done
 

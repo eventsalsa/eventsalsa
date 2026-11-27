@@ -27,7 +27,7 @@ fmt-check: ## Check code formatting
 
 gosec: ## Run gosec security scanner
 	@tmp=$$(mktemp --suffix=.sarif); \
-	gosec -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
+	gosec -exclude-dir=postgres -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
 	rm -f "$$tmp"
 
 govulncheck: ## Run vulnerability checker

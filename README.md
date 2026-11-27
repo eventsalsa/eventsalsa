@@ -45,6 +45,7 @@ eventsalsa/
 │   └── examples/           # Non-published runnable examples
 ├── cqrs/                   # Module: eventsalsa.dev/cqrs
 │   ├── persistence/        # Module: eventsalsa.dev/cqrs/persistence
+│   │   └── postgres/       # Module: eventsalsa.dev/cqrs/persistence/postgres
 │   └── examples/           # Non-published runnable examples
 └── docs/                   # Astro + Starlight website & Go vanity endpoint
 ```
