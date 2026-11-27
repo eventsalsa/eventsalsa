@@ -13,6 +13,7 @@ Each write flows cleanly through three responsibilities:
 iteration-2/
 ├── generate.go                              # //go:generate protoc directives
 ├── main.go                                  # Thin entrypoint running sample commands & queries
+├── bootstrap.go                             # Composition root (DB, ACL adapters, middlewares, buses)
 ├── main_test.go                             # End-to-end tests + nil-proto ACL safety
 ├── commands/                                # Public Protobuf command contracts
 │   ├── place_order.proto
@@ -25,8 +26,6 @@ iteration-2/
 │   ├── order_summary.proto
 │   └── order_summary.pb.go
 └── internal/
-    ├── bootstrap/                           # Composition root (DB, ACL adapters, middlewares, buses)
-    │   └── bootstrap.go
     ├── domain/                              # Entity, invariants, errors, repository port (zero command structs)
     │   ├── errors.go
     │   ├── order.go

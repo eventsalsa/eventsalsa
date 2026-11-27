@@ -1,7 +1,4 @@
-// Package bootstrap wires the composition root for Iteration 3: MemoryDB,
-// eventsalsa.dev/cqrs/persistence (FromStateRepository + NewCommandHandler), ACL translators,
-// middlewares, error classification, and command/query buses.
-package bootstrap
+package main
 
 import (
 	"context"
@@ -19,31 +16,28 @@ import (
 	"eventsalsa.dev/cqrs/query"
 )
 
-// App holds the wired command and query buses for Iteration 3.
-type App struct {
-	Commands *command.Bus
-	Queries  *query.Bus
+type wiredApp struct {
+	commands *command.Bus
+	queries  *query.Bus
 }
 
-// New constructs a fully wired in-memory App instance.
-func New() (*App, error) {
+func newApp() (*wiredApp, error) {
 	db := infrapersistence.NewMemoryDB()
-	cmdBus, err := NewCommandBus(db)
+	cmdBus, err := newCommandBus(db)
 	if err != nil {
 		return nil, err
 	}
-	qBus, err := NewQueryBus(db)
+	qBus, err := newQueryBus(db)
 	if err != nil {
 		return nil, err
 	}
-	return &App{
-		Commands: cmdBus,
-		Queries:  qBus,
+	return &wiredApp{
+		commands: cmdBus,
+		queries:  qBus,
 	}, nil
 }
 
-// NewCommandBus configures middleware, rejection classification, and Decider-backed ACL handlers.
-func NewCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
+func newCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -109,8 +103,7 @@ func NewCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
 	return bus, nil
 }
 
-// NewQueryBus configures read-side middleware and registers Protobuf SQL-like query handlers.
-func NewQueryBus(db *infrapersistence.MemoryDB) (*query.Bus, error) {
+func newQueryBus(db *infrapersistence.MemoryDB) (*query.Bus, error) {
 	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
 		return nil, err

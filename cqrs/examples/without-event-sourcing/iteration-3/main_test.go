@@ -7,7 +7,6 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/acl"
 	infrapersistence "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
@@ -23,13 +22,13 @@ func TestIteration3Example(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
 	db := infrapersistence.NewMemoryDB()
 
-	cmdBus, err := bootstrap.NewCommandBus(db)
+	cmdBus, err := newCommandBus(db)
 	if err != nil {
-		t.Fatalf("NewCommandBus: %v", err)
+		t.Fatalf("newCommandBus: %v", err)
 	}
-	qBus, err := bootstrap.NewQueryBus(db)
+	qBus, err := newQueryBus(db)
 	if err != nil {
-		t.Fatalf("NewQueryBus: %v", err)
+		t.Fatalf("newQueryBus: %v", err)
 	}
 
 	// Canceling before placement is masked as a domain rejection (ErrNotPlaced).
@@ -139,9 +138,9 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
 	}
 
-	qBus, err := bootstrap.NewQueryBus(db)
+	qBus, err := newQueryBus(db)
 	if err != nil {
-		t.Fatalf("NewQueryBus: %v", err)
+		t.Fatalf("newQueryBus: %v", err)
 	}
 	if _, err := query.Execute[*queries.OrderSummary](ctx, qBus, (*queries.GetOrderSummary)(nil)); !errors.Is(
 		err, query.ErrNilQuery,

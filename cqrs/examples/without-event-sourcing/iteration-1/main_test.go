@@ -6,7 +6,6 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-1/commands"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-1/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-1/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-1/queries"
 	"eventsalsa.dev/cqrs/query"
@@ -16,12 +15,12 @@ func TestIteration1Example(t *testing.T) {
 	t.Parallel()
 
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
-	app, err := bootstrap.New()
+	app, err := newApp()
 	if err != nil {
-		t.Fatalf("bootstrap.New: %v", err)
+		t.Fatalf("newApp: %v", err)
 	}
-	cmdBus := app.Commands
-	qBus := app.Queries
+	cmdBus := app.commands
+	qBus := app.queries
 
 	if err := cmdBus.Dispatch(ctx, commands.PlaceOrder{
 		OrderID:    "ord-1",

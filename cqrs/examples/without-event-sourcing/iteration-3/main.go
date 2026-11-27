@@ -1,5 +1,5 @@
-// Package main runs Iteration 3: top-level Protobuf commands and queries dispatched over the
-// buses assembled by internal/bootstrap.
+// Package main demonstrates Iteration 3: top-level Protobuf contracts and Decider/StateRepository
+// wiring (via eventsalsa.dev/cqrs/persistence) assembled in bootstrap.go.
 package main
 
 import (
@@ -9,20 +9,19 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/queries"
 	"eventsalsa.dev/cqrs/query"
 )
 
 func run(ctx context.Context) error {
-	app, err := bootstrap.New()
+	app, err := newApp()
 	if err != nil {
 		return err
 	}
 
 	reqCtx := cqrs.WithTraceID(ctx, "req-iteration3-1")
 
-	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.PlaceOrder{
+	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.PlaceOrder{
 		OrderId:    "ord-100",
 		CustomerId: "cust-42",
 		TotalCents: 14900,
@@ -32,7 +31,7 @@ func run(ctx context.Context) error {
 
 	summary, err := query.Execute[*queries.OrderSummary](
 		reqCtx,
-		app.Queries,
+		app.queries,
 		&queries.GetOrderSummary{OrderId: "ord-100"},
 	)
 	if err != nil {
@@ -42,13 +41,13 @@ func run(ctx context.Context) error {
 		summary.GetOrderId(), summary.GetCustomerName(), summary.GetStatus(), summary.GetDisplayTotal())
 
 	// Cancel once succeeds; canceling again is masked as a domain rejection via WithOnRejected.
-	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.CancelOrder{
+	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.CancelOrder{
 		OrderId: "ord-100",
 		Reason:  "customer request",
 	}); dispatchErr != nil {
 		return dispatchErr
 	}
-	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.CancelOrder{
+	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.CancelOrder{
 		OrderId: "ord-100",
 		Reason:  "duplicate click",
 	}); dispatchErr != nil {
@@ -57,7 +56,7 @@ func run(ctx context.Context) error {
 
 	summary, err = query.Execute[*queries.OrderSummary](
 		reqCtx,
-		app.Queries,
+		app.queries,
 		&queries.GetOrderSummary{OrderId: "ord-100"},
 	)
 	if err != nil {

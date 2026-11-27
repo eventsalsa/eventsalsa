@@ -1,7 +1,4 @@
-// Package bootstrap wires the composition root for Event-Sourced Iteration 1:
-// PostgreSQL pool & schema setup, eventsalsa/store, transaction/retry middlewares,
-// application write handlers, and SQL read handlers.
-package bootstrap
+package main
 
 import (
 	"context"
@@ -18,23 +15,19 @@ import (
 	storepostgres "eventsalsa.dev/store/postgres"
 )
 
-// App holds the wired PostgreSQL pool and CQRS buses for Event-Sourced Iteration 1.
-type App struct {
-	Commands *command.Bus
-	Queries  *query.Bus
+type wiredApp struct {
+	commands *command.Bus
+	queries  *query.Bus
 	pool     *pgxpool.Pool
 }
 
-// Close releases the underlying database pool if initialized.
-func (a *App) Close() {
+func (a *wiredApp) close() {
 	if a != nil && a.pool != nil {
 		a.pool.Close()
 	}
 }
 
-// Open connects to PostgreSQL, ensures the event store and projection schema,
-// and wires the command and query buses.
-func Open(ctx context.Context, dsn string) (*App, error) {
+func openApp(ctx context.Context, dsn string) (*wiredApp, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, err
@@ -46,25 +39,24 @@ func Open(ctx context.Context, dsn string) (*App, error) {
 	}
 
 	es := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	cmdBus, err := NewCommandBus(pool, es)
+	cmdBus, err := newCommandBus(pool, es)
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	qBus, err := NewQueryBus(pool)
+	qBus, err := newQueryBus(pool)
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return &App{
-		Commands: cmdBus,
-		Queries:  qBus,
+	return &wiredApp{
+		commands: cmdBus,
+		queries:  qBus,
 		pool:     pool,
 	}, nil
 }
 
-// NewCommandBus configures observability, OCC retries, pgx transactions, and write handlers.
-func NewCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
+func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -103,8 +95,7 @@ func NewCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 	return bus, nil
 }
 
-// NewQueryBus configures read-side middleware and registers projected SQL query handlers.
-func NewQueryBus(pool *pgxpool.Pool) (*query.Bus, error) {
+func newQueryBus(pool *pgxpool.Pool) (*query.Bus, error) {
 	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
 		return nil, err

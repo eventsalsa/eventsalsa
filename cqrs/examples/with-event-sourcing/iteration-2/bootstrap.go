@@ -1,7 +1,4 @@
-// Package bootstrap wires the composition root for Event-Sourced Iteration 2:
-// PostgreSQL pool & schema setup, eventsalsa/store, transaction/retry middlewares,
-// ACL translators, application write handlers, and Protobuf SQL read handlers.
-package bootstrap
+package main
 
 import (
 	"context"
@@ -20,23 +17,19 @@ import (
 	storepostgres "eventsalsa.dev/store/postgres"
 )
 
-// App holds the wired PostgreSQL pool and CQRS buses for Event-Sourced Iteration 2.
-type App struct {
-	Commands *command.Bus
-	Queries  *query.Bus
+type wiredApp struct {
+	commands *command.Bus
+	queries  *query.Bus
 	pool     *pgxpool.Pool
 }
 
-// Close releases the underlying database pool if initialized.
-func (a *App) Close() {
+func (a *wiredApp) close() {
 	if a != nil && a.pool != nil {
 		a.pool.Close()
 	}
 }
 
-// Open connects to PostgreSQL, ensures the event store and projection schema,
-// and wires the command and query buses.
-func Open(ctx context.Context, dsn string) (*App, error) {
+func openApp(ctx context.Context, dsn string) (*wiredApp, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, err
@@ -48,25 +41,24 @@ func Open(ctx context.Context, dsn string) (*App, error) {
 	}
 
 	es := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
-	cmdBus, err := NewCommandBus(pool, es)
+	cmdBus, err := newCommandBus(pool, es)
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	qBus, err := NewQueryBus(pool)
+	qBus, err := newQueryBus(pool)
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return &App{
-		Commands: cmdBus,
-		Queries:  qBus,
+	return &wiredApp{
+		commands: cmdBus,
+		queries:  qBus,
 		pool:     pool,
 	}, nil
 }
 
-// ClassifyDomainError marks domain and ACL validation errors as business rejections.
-func ClassifyDomainError(err error) error {
+func classifyDomainError(err error) error {
 	if errors.Is(err, domain.ErrAlreadyPlaced) ||
 		errors.Is(err, domain.ErrOrderNotFound) ||
 		errors.Is(err, domain.ErrNotPlaced) ||
@@ -77,8 +69,7 @@ func ClassifyDomainError(err error) error {
 	return err
 }
 
-// RegisterCommandHandlers registers ACL-wrapped application command handlers against orders.
-func RegisterCommandHandlers(bus *command.Bus, orders domain.OrderRepository) error {
+func registerCommandHandlers(bus *command.Bus, orders domain.OrderRepository) error {
 	placeOrderApp := &application.PlaceOrderHandler{Orders: orders}
 	if err := command.Register(bus, acl.NewPlaceOrderACL(placeOrderApp)); err != nil {
 		return err
@@ -87,8 +78,7 @@ func RegisterCommandHandlers(bus *command.Bus, orders domain.OrderRepository) er
 	return command.Register(bus, acl.NewConfirmOrderACL(confirmOrderApp))
 }
 
-// NewCommandBus configures observability, OCC retries, pgx transactions, and write handlers.
-func NewCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
+func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -100,7 +90,7 @@ func NewCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 			}),
 			persistence.WithPgxTx(pool),
 		),
-		command.WithErrorClassifier(ClassifyDomainError),
+		command.WithErrorClassifier(classifyDomainError),
 	)
 	if err != nil {
 		return nil, err
@@ -110,14 +100,13 @@ func NewCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		Store:      es,
 		Projection: &persistence.OrderOverviewProjection{},
 	}
-	if regErr := RegisterCommandHandlers(bus, orders); regErr != nil {
+	if regErr := registerCommandHandlers(bus, orders); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil
 }
 
-// NewQueryBus configures read-side middleware and registers projected SQL query handlers.
-func NewQueryBus(pool *pgxpool.Pool) (*query.Bus, error) {
+func newQueryBus(pool *pgxpool.Pool) (*query.Bus, error) {
 	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
 		return nil, err
