@@ -10,6 +10,7 @@ In Iteration 1 of `with-event-sourcing`, external command (`commands/`) and quer
 iteration-1/
 ├── main.go                              # Thin entrypoint running sample commands & queries
 ├── bootstrap.go                         # Composition root (pgxpool, store, schema, middlewares, buses)
+├── main_test.go                         # Application/domain flow and query boundary tests (DB-free)
 ├── commands/                            # Public write command contracts
 │   ├── place_order.go
 │   └── confirm_order.go
@@ -36,6 +37,7 @@ iteration-1/
         ├── schema.go                    # eventsalsa/store DDL + order_overview_v1 table DDL
         ├── projection.go                # OrderOverviewProjection (projector.Projection shape, called inline)
         ├── order_repository.go          # OrderRepository backed by storepostgres.Store
+        ├── order_repository_test.go     # Tx guard, no-op save, and projection error unit tests
         └── get_order_overview_handler.go# Thin SQL read handler querying order_overview_v1
 ```
 

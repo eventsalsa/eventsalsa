@@ -19,6 +19,7 @@ iteration-1/
     ├── domain/                          # Business entity, invariants, errors, write repository port
     │   ├── errors.go
     │   ├── order.go
+    │   ├── order_test.go
     │   └── repository.go
     ├── application/                     # Write-side use case handlers (1 file per command)
     │   ├── place_order_handler.go

@@ -44,7 +44,8 @@ iteration-3/
         │   ├── tx.go
         │   ├── schema.go
         │   ├── projection.go
-        │   └── order_repository.go
+        │   ├── order_repository.go
+        │   └── order_repository_test.go         # Tx guard, empty append, and projection error tests
         └── queries/                             # Thin SQL read handler returning Protobuf views
             ├── errors.go
             └── get_order_overview_handler.go
