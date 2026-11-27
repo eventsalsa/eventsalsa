@@ -2,10 +2,10 @@
 
 Two idiomatic Go repository layouts for adopting `eventsalsa.dev/cqrs` over standard relational/state persistence without Event Sourcing:
 
-| Style | Directory | Commands live in | Transport / Boundary | Query handlers live in |
-| :--- | :--- | :--- | :--- | :--- |
-| **Style 1** | [`style-1/`](./style-1/) | Top-level `commands/` package | Callers construct and dispatch `commands.*` directly | `internal/infra/` |
-| **Style 2** | [`style-2/`](./style-2/) | `internal/domain/` | Top-level Protobuf contracts in `commands/` & `queries/`; `internal/infra/acl` maps protobuf -> `domain` commands via `command.Func` | `internal/infra/queries/` |
+| Example | Storage Model | Architecture Highlights |
+| --- | --- | --- |
+| [`style-1`](./style-1/) | Single in-memory DB | Direct exported Go `commands`/`queries` structs; `internal/domain` invariants; `internal/application` write handlers; `internal/infra` persistence and read handlers. |
+| [`style-2`](./style-2/) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; private `internal/domain` commands; `command.Func` ACL adapters in `internal/infra/acl` delegating to `internal/application`. |
 
 Notice how both styles:
 - Expose top-level `commands/` and `queries/` packages cleanly separated from `internal/` packages (in Go, anything outside `internal/` is already public—no `public/` wrapper package needed).

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 	"eventsalsa.dev/cqrs/query"
 )
 
-func newCommandBus(db *infra.MemoryDB, logger *slog.Logger) (*command.Bus, error) {
+func newCommandBus(db *infra.MemoryDB) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -41,11 +40,8 @@ func newCommandBus(db *infra.MemoryDB, logger *slog.Logger) (*command.Bus, error
 			return err
 		}),
 		command.WithOnRejected(func(ctx context.Context, rejected any, err error) {
-			logger.WarnContext(ctx, "command rejected",
-				"trace_id", cqrs.TraceIDFromContext(ctx),
-				"command_type", fmt.Sprintf("%T", rejected),
-				"err", err,
-			)
+			fmt.Printf("Command rejected: trace_id=%s command_type=%T err=%v\n",
+				cqrs.TraceIDFromContext(ctx), rejected, err)
 		}),
 	)
 	if err != nil {
@@ -54,7 +50,6 @@ func newCommandBus(db *infra.MemoryDB, logger *slog.Logger) (*command.Bus, error
 
 	if regErr := command.Register(bus, &application.PlaceOrderHandler{
 		Orders: db,
-		Logger: logger,
 	}); regErr != nil {
 		return nil, regErr
 	}
@@ -78,10 +73,9 @@ func newQueryBus(db *infra.MemoryDB) (*query.Bus, error) {
 }
 
 func run(ctx context.Context) error {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	db := infra.NewMemoryDB()
 
-	cmdBus, err := newCommandBus(db, logger)
+	cmdBus, err := newCommandBus(db)
 	if err != nil {
 		return err
 	}

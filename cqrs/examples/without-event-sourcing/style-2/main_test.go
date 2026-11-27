@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"eventsalsa.dev/cqrs"
@@ -23,7 +22,7 @@ func TestStyle2Example(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
 	db := persistence.NewMemoryDB()
 
-	cmdBus, err := newCommandBus(db, slog.New(slog.DiscardHandler))
+	cmdBus, err := newCommandBus(db)
 	if err != nil {
 		t.Fatalf("newCommandBus: %v", err)
 	}
@@ -74,7 +73,6 @@ func TestStyle2ACLNilSafety(t *testing.T) {
 
 	placeACL := acl.NewPlaceOrderACL(&application.PlaceOrderHandler{
 		Orders: db,
-		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err := placeACL.Handle(ctx, nil); !errors.Is(err, domain.ErrEmptyCommand) {
 		t.Fatalf("placeACL(nil) err = %v, want %v", err, domain.ErrEmptyCommand)

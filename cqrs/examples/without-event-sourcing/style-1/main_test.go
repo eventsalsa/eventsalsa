@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 
 	"eventsalsa.dev/cqrs"
@@ -19,7 +18,7 @@ func TestStyle1Example(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
 	db := infra.NewMemoryDB()
 
-	cmdBus, err := newCommandBus(db, slog.New(slog.DiscardHandler))
+	cmdBus, err := newCommandBus(db)
 	if err != nil {
 		t.Fatalf("newCommandBus: %v", err)
 	}
