@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package orders.commands.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands;commands";
+
+// CancelOrder requests cancellation of an existing order.
+message CancelOrder {
+  string order_id = 1;
+  string reason = 2;
+}
