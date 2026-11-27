@@ -9,11 +9,11 @@ var (
 	// ErrConcurrencyConflict indicates an optimistic concurrency conflict during persistence.
 	ErrConcurrencyConflict = errors.New("persistence: concurrency conflict")
 
-	// ErrInvalidVersion indicates a loaded stream version was negative.
-	ErrInvalidVersion = errors.New("persistence: stream version must be non-negative")
+	// ErrInvalidVersion indicates a loaded version was negative.
+	ErrInvalidVersion = errors.New("persistence: version must be non-negative")
 
-	// ErrNilRunner indicates a nil or typed-nil Runner was supplied.
-	ErrNilRunner = errors.New("persistence: runner cannot be nil")
+	// ErrNilAdapter indicates a zero-value Adapter was supplied to NewCommandHandler.
+	ErrNilAdapter = errors.New("persistence: adapter cannot be nil")
 
 	// ErrNilRepository indicates a nil or typed-nil repository was supplied.
 	ErrNilRepository = errors.New("persistence: repository cannot be nil")

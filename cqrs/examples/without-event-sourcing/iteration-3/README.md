@@ -2,14 +2,14 @@
 
 In Iteration 3, external Protobuf contracts and the `command.Func` ACL stay at the boundary, while write-side business rules live in a pure functional **Decider** (`InitialOrder`, `Decide*`, `EvolveOrder`) inside `internal/domain`—even though persistence stores only current state without an event log.
 
-Rather than duplicating per-command handler files or bespoke generic glue, `main.go` binds [`internal/infra/persistence/memory_db.go`](./internal/infra/persistence/memory_db.go) (`persistence.StateRepository[domain.Order]`) cleanly to [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) via `persistence.NewStateRunner` and `persistence.NewCommandHandler`. For single-aggregate commands with no cross-service orchestration, `internal/application` disappears completely (returning only if a use case later needs impure multi-aggregate coordination).
+Rather than duplicating per-command handler files or bespoke generic glue, `main.go` adapts [`internal/infra/persistence/memory_db.go`](./internal/infra/persistence/memory_db.go) (`persistence.StateRepository[domain.Order]`) cleanly via [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) (`persistence.FromStateRepository` + `persistence.NewCommandHandler`). For single-aggregate commands with no cross-service orchestration, `internal/application` disappears completely (returning only if a use case later needs impure multi-aggregate coordination).
 
 ## Package Layout
 
 ```text
 iteration-3/
 ├── generate.go                              # //go:generate protoc directives
-├── main.go                                  # Composition root (DB, cqrs/persistence runner, ACL, buses, run)
+├── main.go                                  # Composition root (DB, cqrs/persistence adapter, ACL, buses, run)
 ├── main_test.go                             # End-to-end tests + nil-proto ACL safety
 ├── commands/                                # Public Protobuf command contracts
 │   ├── place_order.proto
@@ -43,7 +43,7 @@ iteration-3/
 
 ## Why choose Iteration 3
 
-- Eliminates per-command handler boilerplate via [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) (`NewStateRunner`, `NewCommandHandler`).
+- Eliminates per-command handler boilerplate via [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) (`FromStateRepository`, `NewCommandHandler`).
 - Keeps `internal/domain` 100% pure—no repository interface, no mutating entity methods, and zero persistence imports.
 - Unlocks sub-millisecond `Given / When / Then` domain testing with [`eventsalsa.dev/cqrs/spectest`](../../../spectest/) even over non-event-sourced state storage.
 - See [`../iteration-2/`](../iteration-2/) for classic entity methods with explicit `internal/application` orchestration handlers.

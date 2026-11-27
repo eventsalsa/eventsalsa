@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package orders.es.v3.commands.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/commands;commands";
+
+// ConfirmOrder requests confirming an existing order.
+message ConfirmOrder {
+  string order_id = 1;
+}

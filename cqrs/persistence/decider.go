@@ -1,11 +1,6 @@
 package persistence
 
-import (
-	"context"
-	"strings"
-
-	"eventsalsa.dev/cqrs/command"
-)
+import "context"
 
 // Decider defines pure state initialization and evolution functions for state type S
 // over domain event type E, matching the function signatures used by cqrs/spectest.
@@ -24,76 +19,53 @@ func (d Decider[S, E]) validate() error {
 	return nil
 }
 
-// Runner executes a command decision against loaded state for id and persists any
-// resulting state change or emitted events atomically.
-type Runner[S any, E any] interface {
-	Run(ctx context.Context, id string, decide func(state S) ([]E, error)) error
+func (d Decider[S, E]) fold(state S, events []E) S {
+	for i := range events {
+		state = d.Evolve(state, events[i])
+	}
+	return state
 }
 
-// NewCommandHandler adapts a pure command decision function decide onto command.Handler[C]
-// using runner for state reconstitution and persistence.
-func NewCommandHandler[S any, E any, C any](
-	runner Runner[S, E],
-	idOf func(cmd C) string,
-	decide func(state S, cmd C) ([]E, error),
-) (command.Handler[C], error) {
-	if isNilValue(runner) {
-		return nil, ErrNilRunner
-	}
-	if idOf == nil {
-		return nil, ErrNilTargetID
-	}
-	if decide == nil {
-		return nil, ErrNilDecide
-	}
-
-	return command.Func[C](func(ctx context.Context, cmd C) error {
-		id := idOf(cmd)
-		if err := validateTarget(ctx, id); err != nil {
-			return err
-		}
-		return runner.Run(ctx, id, func(state S) ([]E, error) {
-			return decide(state, cmd)
-		})
-	}), nil
+// Adapter binds a StateRepository or EventRepository to a Decider[S, E] so
+// NewCommandHandler can execute load, fold, decide, and optimistic-concurrency commit
+// identically across state-based and event-sourced storage.
+//
+// Construct an Adapter using FromStateRepository or FromEventRepository.
+type Adapter[S any, E any] struct {
+	exec func(ctx context.Context, id string, decideFn func(state S) ([]E, error)) error
+	err  error
 }
 
-// MustNewCommandHandler calls NewCommandHandler and panics if any argument is invalid.
-func MustNewCommandHandler[S any, E any, C any](
-	runner Runner[S, E],
-	idOf func(cmd C) string,
-	decide func(state S, cmd C) ([]E, error),
-) command.Handler[C] {
-	h, err := NewCommandHandler(runner, idOf, decide)
-	if err != nil {
-		panic(err)
-	}
-	return h
-}
-
-func validateDependencies[S any, E any](repo any, decider Decider[S, E]) error {
+func newAdapter[S any, E any](
+	repo any,
+	decider Decider[S, E],
+	loadState func(ctx context.Context, id string) (S, int64, error),
+	persist func(ctx context.Context, id string, expectedVersion int64, prevState S, events []E) error,
+) Adapter[S, E] {
 	if isNilValue(repo) {
-		return ErrNilRepository
+		return Adapter[S, E]{err: ErrNilRepository}
 	}
-	return decider.validate()
-}
+	if err := decider.validate(); err != nil {
+		return Adapter[S, E]{err: err}
+	}
+	return Adapter[S, E]{
+		exec: func(ctx context.Context, id string, decideFn func(S) ([]E, error)) error {
+			state, version, loadErr := loadState(ctx, id)
+			if loadErr != nil {
+				return loadErr
+			}
+			if version < 0 {
+				return ErrInvalidVersion
+			}
 
-func validateTarget(ctx context.Context, id string) error {
-	if ctx == nil {
-		return ErrNilContext
+			events, decideErr := decideFn(state)
+			if decideErr != nil {
+				return decideErr
+			}
+			if len(events) == 0 {
+				return nil
+			}
+			return persist(ctx, id, version, state, events)
+		},
 	}
-	if strings.TrimSpace(id) == "" {
-		return ErrEmptyTargetID
-	}
-	return nil
-}
-
-func validateRun[S any, E any](ctx context.Context, id string, decide func(S) ([]E, error)) error {
-	if err := validateTarget(ctx, id); err != nil {
-		return err
-	}
-	if decide == nil {
-		return ErrNilDecide
-	}
-	return nil
 }

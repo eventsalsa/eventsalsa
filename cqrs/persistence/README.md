@@ -1,21 +1,21 @@
 # eventsalsa/cqrs/persistence
 
-Database-agnostic `Decider`, `StateRepository`, `EventRepository`, and generic `command.Handler` runners for `eventsalsa.dev/cqrs`.
+Database-agnostic `Decider`, `StateRepository`, `EventRepository`, `Adapter`, and generic `NewCommandHandler` wiring for `eventsalsa.dev/cqrs`.
 
-Depends strictly on `eventsalsa.dev/cqrs` and Go's standard library (zero database or driver imports). PostgreSQL-specific `eventsalsa/store`, `eventsalsa/snapshot`, and `pgx` adapters live in a dedicated downstream submodule.
+Depends strictly on `eventsalsa.dev/cqrs` and Go's standard library (zero database or driver imports). PostgreSQL-specific `eventsalsa/store`, `eventsalsa/snapshot`, and `pgx` adapters will follow in `eventsalsa.dev/cqrs/persistence/postgres`.
 
 ## Usage
+
+Both storage models bind `(repo, decider)` into one `Adapter[S, E]` and register handlers with the same `NewCommandHandler` constructor—letting multiple commands share one adapter and keeping command wiring identical across state-based and event-sourced backends.
 
 ### With State Persistence (`StateRepository[S]`)
 
 ```go
-orders, err := persistence.NewStateRunner(repo, persistence.Decider[domain.Order, any]{
+decider := persistence.Decider[domain.Order, any]{
 	Initial: domain.InitialOrder,
 	Evolve:  domain.EvolveOrder,
-})
-if err != nil {
-	return err
 }
+orders := persistence.FromStateRepository(repo, decider)
 
 placeHandler, err := persistence.NewCommandHandler(
 	orders,
@@ -24,16 +24,16 @@ placeHandler, err := persistence.NewCommandHandler(
 )
 ```
 
+`StateRepository` carries optimistic concurrency via `(version int64, expectedVersion int64)`: `Load` returns `ErrNotFound` when missing (causing `Save` to receive `expectedVersion == 0`), and updates receive the loaded `version` so concurrent writes fail with `ErrConcurrencyConflict`.
+
 ### With Event-Sourced Persistence (`EventRepository[E]`)
 
 ```go
-orders, err := persistence.NewEventRunner(eventRepo, persistence.Decider[domain.Order, any]{
+decider := persistence.Decider[domain.Order, any]{
 	Initial: domain.InitialOrder,
 	Evolve:  domain.EvolveOrder,
-})
-if err != nil {
-	return err
 }
+orders := persistence.FromEventRepository(eventRepo, decider)
 
 confirmHandler, err := persistence.NewCommandHandler(
 	orders,

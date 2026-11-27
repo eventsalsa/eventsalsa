@@ -61,121 +61,83 @@ func (r *spyEventRepo) Append(_ context.Context, id string, expectedVersion int6
 	return nil
 }
 
-func TestNewEventRunner_Validation(t *testing.T) {
-	t.Parallel()
-
-	d := counterDecider()
-	var typedNilRepo *spyEventRepo
-
-	for _, tc := range []struct {
-		name    string
-		repo    persistence.EventRepository[any]
-		decider persistence.Decider[counterState, any]
-		wantErr error
-	}{
-		{name: "nil repo", repo: nil, decider: d, wantErr: persistence.ErrNilRepository},
-		{name: "typed-nil repo", repo: typedNilRepo, decider: d, wantErr: persistence.ErrNilRepository},
-		{name: "nil Initial", repo: newSpyEventRepo(), decider: persistence.Decider[counterState, any]{Evolve: d.Evolve}, wantErr: persistence.ErrNilInitial},
-		{name: "nil Evolve", repo: newSpyEventRepo(), decider: persistence.Decider[counterState, any]{Initial: d.Initial}, wantErr: persistence.ErrNilEvolve},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			runner, err := persistence.NewEventRunner(tc.repo, tc.decider)
-			if runner != nil {
-				t.Fatalf("expected nil runner, got %+v", runner)
-			}
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("err = %v, want %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestEventRunner_LifecycleAndGuards(t *testing.T) {
+func TestFromEventRepository_LifecycleAndGuards(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	repo := newSpyEventRepo()
-	runner := persistence.MustNewEventRunner(repo, counterDecider())
+	adapter := persistence.FromEventRepository(repo, counterDecider())
 
-	// Nil receiver and guard checks.
-	var nilRunner *persistence.EventRunner[counterState, any]
-	if _, _, err := nilRunner.Load(ctx, "s-1"); !errors.Is(err, persistence.ErrNilRunner) {
-		t.Fatalf("nil Load err = %v, want %v", err, persistence.ErrNilRunner)
-	}
-	if err := nilRunner.Run(ctx, "s-1", func(counterState) ([]any, error) { return nil, nil }); !errors.Is(err, persistence.ErrNilRunner) {
-		t.Fatalf("nil Run err = %v, want %v", err, persistence.ErrNilRunner)
-	}
-	if _, _, err := runner.Load(nil, "s-1"); !errors.Is(err, persistence.ErrNilContext) { //nolint:staticcheck // deliberate nil ctx test
-		t.Fatalf("nil ctx Load err = %v, want %v", err, persistence.ErrNilContext)
-	}
-	if _, _, err := runner.Load(ctx, "  "); !errors.Is(err, persistence.ErrEmptyTargetID) {
-		t.Fatalf("blank id Load err = %v, want %v", err, persistence.ErrEmptyTargetID)
-	}
-	if err := runner.Run(ctx, "s-1", nil); !errors.Is(err, persistence.ErrNilDecide) {
-		t.Fatalf("nil decide Run err = %v, want %v", err, persistence.ErrNilDecide)
-	}
+	errRejected := errors.New("rejected")
+	handler := persistence.MustNewCommandHandler(adapter, addID, func(_ counterState, c addCmd) ([]any, error) {
+		if c.delta < 0 {
+			return nil, errRejected
+		}
+		if c.delta == 0 {
+			return nil, nil
+		}
+		return []any{counterIncremented{delta: c.delta}}, nil
+	})
 
-	// ErrNotFound from Load is normalized to Initial(id) at version 0.
+	// ErrNotFound from Load is normalized to Initial(id) at expectedVersion = 0.
 	repo.loadErr = persistence.ErrNotFound
-	state, version, err := runner.Load(ctx, "s-missing")
-	if err != nil || version != 0 || state.id != "s-missing" || state.count != 0 {
-		t.Fatalf("Load on ErrNotFound = (%+v, %d, %v)", state, version, err)
+	if err := handler.Handle(ctx, addCmd{id: "s-missing", delta: 4}); err != nil {
+		t.Fatalf("ErrNotFound Load failed: %v", err)
+	}
+	if repo.lastExpected != 0 || repo.appendCalls != 1 {
+		t.Fatalf("lastExpected=%d appendCalls=%d", repo.lastExpected, repo.appendCalls)
+	}
+	repo.loadErr = nil
+
+	// Non-ErrNotFound Load error stops before decide or Append.
+	dbErr := errors.New("store unavailable")
+	repo.loadErr = dbErr
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 1}); !errors.Is(err, dbErr) || repo.appendCalls != 1 {
+		t.Fatalf("loadErr=%v appendCalls=%d", err, repo.appendCalls)
 	}
 	repo.loadErr = nil
 
 	// Negative version from buggy repo fails with ErrInvalidVersion.
 	repo.forceNegVersion = true
-	if _, _, negErr := runner.Load(ctx, "s-neg"); !errors.Is(negErr, persistence.ErrInvalidVersion) {
-		t.Fatalf("negative version err = %v, want %v", negErr, persistence.ErrInvalidVersion)
+	if err := handler.Handle(ctx, addCmd{id: "s-neg", delta: 1}); !errors.Is(err, persistence.ErrInvalidVersion) {
+		t.Fatalf("negative version err = %v, want %v", err, persistence.ErrInvalidVersion)
 	}
 	repo.forceNegVersion = false
 
-	// First append uses expectedVersion = 0; zero-event decide skips Append; second appends at 1.
-	if runErr := runner.Run(ctx, "s-1", func(s counterState) ([]any, error) {
-		return []any{counterIncremented{delta: 5}}, nil
-	}); runErr != nil {
-		t.Fatalf("first Run failed: %v", runErr)
+	// First append uses expectedVersion = 0; zero-event no-op skips Append; second appends at 1.
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 5}); err != nil {
+		t.Fatalf("first Handle failed: %v", err)
 	}
-	if repo.lastExpected != 0 || repo.appendCalls != 1 {
-		t.Fatalf("after first Run: lastExpected=%d appendCalls=%d", repo.lastExpected, repo.appendCalls)
+	if repo.lastExpected != 0 || repo.appendCalls != 2 {
+		t.Fatalf("after first Handle: lastExpected=%d appendCalls=%d", repo.lastExpected, repo.appendCalls)
 	}
 
-	if noopErr := runner.Run(ctx, "s-1", func(s counterState) ([]any, error) {
-		if s.count != 5 {
-			t.Fatalf("reconstituted count = %d, want 5", s.count)
-		}
-		return nil, nil
-	}); noopErr != nil || repo.appendCalls != 1 {
-		t.Fatalf("no-op Run err=%v appendCalls=%d", noopErr, repo.appendCalls)
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 0}); err != nil || repo.appendCalls != 2 {
+		t.Fatalf("no-op err=%v appendCalls=%d", err, repo.appendCalls)
 	}
 
-	if secondErr := runner.Run(ctx, "s-1", func(s counterState) ([]any, error) {
-		return []any{counterIncremented{delta: 3}}, nil
-	}); secondErr != nil {
-		t.Fatalf("second Run failed: %v", secondErr)
-	}
-	if repo.lastExpected != 1 || repo.appendCalls != 2 {
-		t.Fatalf("after second Run: lastExpected=%d appendCalls=%d", repo.lastExpected, repo.appendCalls)
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: -1}); !errors.Is(err, errRejected) || repo.appendCalls != 2 {
+		t.Fatalf("decide err=%v appendCalls=%d", err, repo.appendCalls)
 	}
 
-	finalState, finalVer, loadErr := runner.Load(ctx, "s-1")
-	if loadErr != nil || finalVer != 2 || finalState.count != 8 {
-		t.Fatalf("final Load = (%+v, %d, %v), want count=8 ver=2", finalState, finalVer, loadErr)
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 3}); err != nil {
+		t.Fatalf("second Handle failed: %v", err)
+	}
+	if repo.lastExpected != 1 || repo.appendCalls != 3 || len(repo.streams["s-1"]) != 2 {
+		t.Fatalf("after second Handle: lastExpected=%d appendCalls=%d len=%d", repo.lastExpected, repo.appendCalls, len(repo.streams["s-1"]))
 	}
 }
 
-func TestEventRunner_RetryMiddlewareAndCommandBusIntegration(t *testing.T) {
+func TestFromEventRepository_RetryMiddlewareAndCommandBusIntegration(t *testing.T) {
 	t.Parallel()
 
 	repo := newSpyEventRepo()
 	repo.failNextConflicts.Store(2)
-	runner := persistence.MustNewEventRunner(repo, counterDecider())
 
 	errInvalidDelta := errors.New("delta must be positive")
 	handler := persistence.MustNewCommandHandler(
-		runner,
-		func(c addCmd) string { return c.id },
+		persistence.FromEventRepository(repo, counterDecider()),
+		addID,
 		func(_ counterState, c addCmd) ([]any, error) {
 			if c.delta <= 0 {
 				return nil, errInvalidDelta
@@ -225,19 +187,8 @@ func TestEventRunner_RetryMiddlewareAndCommandBusIntegration(t *testing.T) {
 		t.Fatalf("rejected = %v, want [errInvalidDelta]", rejected)
 	}
 
-	state, ver, loadErr := runner.Load(ctx, "ctr-occ")
-	if loadErr != nil || ver != 1 || state.count != 10 {
-		t.Fatalf("Load = (%+v, %d, %v), want count=10 ver=1", state, ver, loadErr)
+	events, ver, loadErr := repo.Load(ctx, "ctr-occ")
+	if loadErr != nil || ver != 1 || len(events) != 1 {
+		t.Fatalf("Load = (%v, %d, %v), want 1 event ver=1", events, ver, loadErr)
 	}
-}
-
-func TestMustNewEventRunner_PanicsOnInvalid(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic from MustNewEventRunner")
-		}
-	}()
-	persistence.MustNewEventRunner[counterState, any](nil, counterDecider())
 }

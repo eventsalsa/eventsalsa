@@ -92,6 +92,15 @@ func TestIteration3Example(t *testing.T) {
 	if canceled.GetStatus() != domain.StatusCanceled {
 		t.Fatalf("status = %q, want %q", canceled.GetStatus(), domain.StatusCanceled)
 	}
+
+	// Stale expectedVersion on Save triggers ErrConcurrencyConflict.
+	_, currentVer, loadErr := db.Load(ctx, "ord-1")
+	if loadErr != nil || currentVer != 2 {
+		t.Fatalf("Load = (ver=%d, err=%v), want version 2", currentVer, loadErr)
+	}
+	if staleErr := db.Save(ctx, "ord-1", 1, domain.Order{ID: "ord-1"}); !errors.Is(staleErr, persistence.ErrConcurrencyConflict) {
+		t.Fatalf("stale Save err = %v, want %v", staleErr, persistence.ErrConcurrencyConflict)
+	}
 }
 
 func TestIteration3ACLNilSafety(t *testing.T) {
@@ -100,10 +109,11 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-nil-trace")
 	db := infrapersistence.NewMemoryDB()
 
-	orders := persistence.MustNewStateRunner(db, persistence.Decider[domain.Order, any]{
+	decider := persistence.Decider[domain.Order, any]{
 		Initial: domain.InitialOrder,
 		Evolve:  domain.EvolveOrder,
-	})
+	}
+	orders := persistence.FromStateRepository(db, decider)
 
 	placeACL := acl.NewPlaceOrderACL(persistence.MustNewCommandHandler(
 		orders,

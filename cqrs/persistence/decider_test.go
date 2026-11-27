@@ -34,74 +34,58 @@ type addCmd struct {
 	delta int
 }
 
-type spyRunner struct {
-	calledID string
-	retErr   error
-}
+func addID(c addCmd) string { return c.id }
 
-func (s *spyRunner) Run(_ context.Context, id string, decide func(counterState) ([]any, error)) error {
-	s.calledID = id
-	if s.retErr != nil {
-		return s.retErr
+func decideAdd(_ counterState, c addCmd) ([]any, error) {
+	if c.delta <= 0 {
+		return nil, errors.New("delta must be positive")
 	}
-	_, err := decide(counterState{id: id, count: 10})
-	return err
+	return []any{counterIncremented{delta: c.delta}}, nil
 }
 
-func TestNewCommandHandler_ValidationAndExecution(t *testing.T) {
+func TestNewCommandHandler_Validation(t *testing.T) {
 	t.Parallel()
 
-	idOf := func(c addCmd) string { return c.id }
-	decide := func(_ counterState, c addCmd) ([]any, error) {
-		if c.delta <= 0 {
-			return nil, errors.New("non-positive delta")
-		}
-		return []any{counterIncremented{delta: c.delta}}, nil
-	}
+	d := counterDecider()
+	var (
+		typedNilStateRepo *spyStateRepo
+		typedNilEventRepo *spyEventRepo
+	)
 
-	var typedNilRunner *persistence.StateRunner[counterState, any]
+	stateAdapter := persistence.FromStateRepository(newSpyStateRepo(), d)
+	eventAdapter := persistence.FromEventRepository(newSpyEventRepo(), d)
+
 	for _, tc := range []struct {
 		name    string
-		runner  persistence.Runner[counterState, any]
+		adapter persistence.Adapter[counterState, any]
 		idOf    func(addCmd) string
 		decide  func(counterState, addCmd) ([]any, error)
 		wantErr error
 	}{
-		{name: "nil runner", runner: nil, idOf: idOf, decide: decide, wantErr: persistence.ErrNilRunner},
-		{name: "typed-nil runner", runner: typedNilRunner, idOf: idOf, decide: decide, wantErr: persistence.ErrNilRunner},
-		{name: "nil idOf", runner: &spyRunner{}, idOf: nil, decide: decide, wantErr: persistence.ErrNilTargetID},
-		{name: "nil decide", runner: &spyRunner{}, idOf: idOf, decide: nil, wantErr: persistence.ErrNilDecide},
+		{name: "zero adapter", adapter: persistence.Adapter[counterState, any]{}, idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilAdapter},
+		{name: "nil state repo", adapter: persistence.FromStateRepository[counterState, any](nil, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
+		{name: "typed-nil state repo", adapter: persistence.FromStateRepository(typedNilStateRepo, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
+		{name: "nil event repo", adapter: persistence.FromEventRepository[counterState, any](nil, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
+		{name: "typed-nil event repo", adapter: persistence.FromEventRepository(typedNilEventRepo, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
+		{name: "state nil Initial", adapter: persistence.FromStateRepository(newSpyStateRepo(), persistence.Decider[counterState, any]{Evolve: d.Evolve}), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilInitial},
+		{name: "state nil Evolve", adapter: persistence.FromStateRepository(newSpyStateRepo(), persistence.Decider[counterState, any]{Initial: d.Initial}), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilEvolve},
+		{name: "event nil Initial", adapter: persistence.FromEventRepository(newSpyEventRepo(), persistence.Decider[counterState, any]{Evolve: d.Evolve}), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilInitial},
+		{name: "event nil Evolve", adapter: persistence.FromEventRepository(newSpyEventRepo(), persistence.Decider[counterState, any]{Initial: d.Initial}), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilEvolve},
+		{name: "state nil idOf", adapter: stateAdapter, idOf: nil, decide: decideAdd, wantErr: persistence.ErrNilTargetID},
+		{name: "event nil idOf", adapter: eventAdapter, idOf: nil, decide: decideAdd, wantErr: persistence.ErrNilTargetID},
+		{name: "state nil decide", adapter: stateAdapter, idOf: addID, decide: nil, wantErr: persistence.ErrNilDecide},
+		{name: "event nil decide", adapter: eventAdapter, idOf: addID, decide: nil, wantErr: persistence.ErrNilDecide},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h, err := persistence.NewCommandHandler(tc.runner, tc.idOf, tc.decide)
-			if h != nil {
-				t.Fatalf("expected nil handler, got %v", h)
+			handler, err := persistence.NewCommandHandler(tc.adapter, tc.idOf, tc.decide)
+			if handler != nil {
+				t.Fatalf("expected nil handler, got %v", handler)
 			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
 		})
-	}
-
-	runner := &spyRunner{}
-	handler := persistence.MustNewCommandHandler(runner, idOf, decide)
-
-	if err := handler.Handle(nil, addCmd{id: "c-1", delta: 1}); !errors.Is(err, persistence.ErrNilContext) { //nolint:staticcheck // deliberate nil ctx test
-		t.Fatalf("nil ctx err = %v, want %v", err, persistence.ErrNilContext)
-	}
-	if err := handler.Handle(context.Background(), addCmd{id: "", delta: 1}); !errors.Is(err, persistence.ErrEmptyTargetID) {
-		t.Fatalf("empty id err = %v, want %v", err, persistence.ErrEmptyTargetID)
-	}
-	if err := handler.Handle(context.Background(), addCmd{id: "  \t ", delta: 1}); !errors.Is(err, persistence.ErrEmptyTargetID) {
-		t.Fatalf("blank id err = %v, want %v", err, persistence.ErrEmptyTargetID)
-	}
-
-	if err := handler.Handle(context.Background(), addCmd{id: "ctr-1", delta: 5}); err != nil {
-		t.Fatalf("Handle unexpected error: %v", err)
-	}
-	if runner.calledID != "ctr-1" {
-		t.Fatalf("calledID = %q, want %q", runner.calledID, "ctr-1")
 	}
 }
 
@@ -110,8 +94,39 @@ func TestMustNewCommandHandler_PanicsOnInvalid(t *testing.T) {
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("expected panic from MustNewCommandHandler on invalid args")
+			t.Fatal("expected panic from MustNewCommandHandler")
 		}
 	}()
-	persistence.MustNewCommandHandler[counterState, any, addCmd](nil, nil, nil)
+	persistence.MustNewCommandHandler(persistence.Adapter[counterState, any]{}, addID, decideAdd)
+}
+
+func TestCommandHandler_InputGuards(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	d := counterDecider()
+
+	stateH := persistence.MustNewCommandHandler(persistence.FromStateRepository(newSpyStateRepo(), d), addID, decideAdd)
+	eventH := persistence.MustNewCommandHandler(persistence.FromEventRepository(newSpyEventRepo(), d), addID, decideAdd)
+
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context //nolint:containedctx // table-driven guard cases
+		cmd     addCmd
+		wantErr error
+	}{
+		{name: "nil context", ctx: nil, cmd: addCmd{id: "c-1", delta: 1}, wantErr: persistence.ErrNilContext},
+		{name: "empty id", ctx: ctx, cmd: addCmd{id: "", delta: 1}, wantErr: persistence.ErrEmptyTargetID},
+		{name: "blank id", ctx: ctx, cmd: addCmd{id: "  \t ", delta: 1}, wantErr: persistence.ErrEmptyTargetID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := stateH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("stateH err = %v, want %v", err, tc.wantErr)
+			}
+			if err := eventH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("eventH err = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
 }

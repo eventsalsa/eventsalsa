@@ -16,7 +16,7 @@ This document defines the architecture, conventions, cross-module development wo
 | `encryption/kek/gcpkms/` | `eventsalsa.dev/encryption/kek/gcpkms` — Google Cloud KMS KEK `Wrapper` | `encryption/kek/gcpkms` |
 | `encryption/examples/` | `eventsalsa.dev/encryption/examples` — Internal runnable examples (non-published) | *(excluded)* |
 | `cqrs/` | `eventsalsa.dev/cqrs` — Transport-free `cqrs/command` (`Bus.Dispatch`), `cqrs/query` (`Execute`), `ObservabilityMiddleware`, retry, and `spectest` | `cqrs` |
-| `cqrs/persistence/` | `eventsalsa.dev/cqrs/persistence` — DB-agnostic `Decider`, `StateRepository`, `EventRepository`, and generic `NewCommandHandler` runners | *(after `cqrs` v0.0.1)* |
+| `cqrs/persistence/` | `eventsalsa.dev/cqrs/persistence` — DB-agnostic `Decider`, `StateRepository`, `EventRepository`, `Adapter`, and generic `NewCommandHandler` | *(after `cqrs` v0.0.1)* |
 | `cqrs/examples/` | `eventsalsa.dev/cqrs/examples` — Internal runnable examples (non-published) | *(excluded)* |
 | `docs/` | Astro + Starlight site deployed to `https://eventsalsa.dev` via Cloudflare Workers (`?go-get=1` handler in `docs/worker/index.ts`) | *(excluded)* |
 

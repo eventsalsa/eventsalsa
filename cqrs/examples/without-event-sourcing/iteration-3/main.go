@@ -1,5 +1,5 @@
 // Package main wires Iteration 3: top-level Protobuf contracts, command.Func ACL
-// translators inside internal/infra/acl, generic Decider persistence runners from
+// translators inside internal/infra/acl, generic StateRepository/Decider wiring from
 // eventsalsa.dev/cqrs/persistence, pure Initial/Decide/Evolve domain logic in internal/domain,
 // and state read handlers inside internal/infra/queries.
 package main
@@ -32,7 +32,8 @@ func newCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
 				BaseBackoff: 5 * time.Millisecond,
 				MaxBackoff:  25 * time.Millisecond,
 				RetryIf: func(err error) bool {
-					return errors.Is(err, infrapersistence.ErrTransientWrite)
+					return errors.Is(err, infrapersistence.ErrTransientWrite) ||
+						errors.Is(err, persistence.ErrConcurrencyConflict)
 				},
 			}),
 		),
@@ -56,13 +57,11 @@ func newCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
 		return nil, err
 	}
 
-	orders, err := persistence.NewStateRunner(db, persistence.Decider[domain.Order, any]{
+	decider := persistence.Decider[domain.Order, any]{
 		Initial: domain.InitialOrder,
 		Evolve:  domain.EvolveOrder,
-	})
-	if err != nil {
-		return nil, err
 	}
+	orders := persistence.FromStateRepository(db, decider)
 
 	placeHandler, err := persistence.NewCommandHandler(
 		orders,
