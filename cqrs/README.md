@@ -160,6 +160,7 @@ Runnable samples live in the standalone [`examples/`](./examples/) sub-module:
 - **[`examples/without-event-sourcing/iteration-2`](./examples/without-event-sourcing/iteration-2/)** — CQRS without Event Sourcing: Protobuf `commands`/`queries` contracts, `command.Func` ACL adapters in `internal/infra/acl`, internal `internal/application` commands/handlers, and `internal/domain` entity invariants
 - **[`examples/without-event-sourcing/iteration-3`](./examples/without-event-sourcing/iteration-3/)** — CQRS without Event Sourcing: Protobuf contracts, ACL adapters, generic `Decider`/`StateRepository` handler in `internal/infra/persistence`, and a pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`
 - **[`examples/with-event-sourcing/iteration-1`](./examples/with-event-sourcing/iteration-1/)** — CQRS with Event Sourcing using exported Go `commands`/`queries` structs, `internal/domain` event-sourced `Order` aggregate & `OrderRepository` (`Load`/`Save`), `internal/application` handlers, and `eventmap-gen` + `eventsalsa/store` + inline projection in `internal/infra`
+- **[`examples/with-event-sourcing/iteration-2`](./examples/with-event-sourcing/iteration-2/)** — CQRS with Event Sourcing adding compiled Protobuf `commands`/`queries` contracts, `command.Func` ACL translators in `internal/infra/acl`, internal `internal/application` commands, OOP `Order` aggregate & `OrderRepository`, and separated `internal/infra/{persistence,queries}` adapters
 
 ## Package Layout
 
