@@ -8,7 +8,7 @@ In Iteration 1 of `with-event-sourcing`, external command (`commands/`) and quer
 
 ```text
 iteration-1/
-├── main.go                              # Composition root (pgxpool, store, schema, buses, run)
+├── main.go                              # Thin entrypoint running sample commands & queries
 ├── commands/                            # Public write command contracts
 │   ├── place_order.go
 │   └── confirm_order.go
@@ -16,6 +16,8 @@ iteration-1/
 │   ├── get_order_overview.go
 │   └── order_overview.go
 └── internal/
+    ├── bootstrap/                       # Composition root (pgxpool, store, schema, middlewares, buses)
+    │   └── bootstrap.go
     ├── domain/                          # Order aggregate & repository port (zero store/pgx imports)
     │   ├── errors.go
     │   ├── order.go                     # Order, PlaceOrder, ReconstituteOrder, Evolve, Confirm

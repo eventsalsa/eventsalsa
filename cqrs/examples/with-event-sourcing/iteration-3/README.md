@@ -2,14 +2,14 @@
 
 In Iteration 3 of `with-event-sourcing`, external Protobuf contracts (`commands/*.proto`, `queries/*.proto`) and the `command.Func` ACL stay at the boundary, while write-side business rules move to a pure functional **Decider** (`InitialOrder`, `Decide*`, `EvolveOrder`) in `internal/domain` tested with `eventsalsa.dev/cqrs/spectest`.
 
-Rather than maintaining aggregate `Version`/`uncommitted`/`MarkCommitted` plumbing or per-command `internal/application` handler files, `main.go` adapts [`internal/infra/persistence/order_repository.go`](./internal/infra/persistence/order_repository.go) (`persistence.EventRepository[any]` backed by `eventsalsa/store`) via [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) (`persistence.FromEventRepository` + `persistence.NewCommandHandler`).
+Rather than maintaining aggregate `Version`/`uncommitted`/`MarkCommitted` plumbing or per-command `internal/application` handler files, `internal/bootstrap` adapts [`internal/infra/persistence/order_repository.go`](./internal/infra/persistence/order_repository.go) (`persistence.EventRepository[any]` backed by `eventsalsa/store`) via [`eventsalsa.dev/cqrs/persistence`](../../../persistence/) (`persistence.FromEventRepository` + `persistence.NewCommandHandler`).
 
 ## Package Layout
 
 ```text
 iteration-3/
 ├── generate.go                                  # //go:generate protoc directives
-├── main.go                                      # Composition root (pgxpool, store, cqrs/persistence adapter, ACL, buses, run)
+├── main.go                                      # Thin entrypoint running sample commands & queries
 ├── main_test.go                                 # End-to-end flow, OCC retry, and nil-proto ACL tests (DB-free)
 ├── commands/                                    # Public Protobuf command contracts
 │   ├── place_order.proto
@@ -22,6 +22,8 @@ iteration-3/
 │   ├── order_overview.proto
 │   └── order_overview.pb.go
 └── internal/
+    ├── bootstrap/                               # Composition root (pgxpool, store, cqrs/persistence adapter, ACL, buses)
+    │   └── bootstrap.go
     ├── domain/                                  # Pure Functional Decider: state, commands, Decide/Evolve
     │   ├── errors.go
     │   ├── order.go                             # Order state, InitialOrder, EvolveOrder

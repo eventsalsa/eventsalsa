@@ -8,6 +8,7 @@ import (
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/commands"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/application"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/infra/acl"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/infra/persistence"
@@ -22,13 +23,13 @@ func TestIteration2Example(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
 	db := persistence.NewMemoryDB()
 
-	cmdBus, err := newCommandBus(db)
+	cmdBus, err := bootstrap.NewCommandBus(db)
 	if err != nil {
-		t.Fatalf("newCommandBus: %v", err)
+		t.Fatalf("NewCommandBus: %v", err)
 	}
-	qBus, err := newQueryBus(db)
+	qBus, err := bootstrap.NewQueryBus(db)
 	if err != nil {
-		t.Fatalf("newQueryBus: %v", err)
+		t.Fatalf("NewQueryBus: %v", err)
 	}
 
 	if err := cmdBus.Dispatch(ctx, &commands.PlaceOrder{
@@ -100,9 +101,9 @@ func TestIteration2ACLNilSafety(t *testing.T) {
 		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
 	}
 
-	qBus, err := newQueryBus(db)
+	qBus, err := bootstrap.NewQueryBus(db)
 	if err != nil {
-		t.Fatalf("newQueryBus: %v", err)
+		t.Fatalf("NewQueryBus: %v", err)
 	}
 	if _, err := query.Execute[*queries.OrderSummary](ctx, qBus, (*queries.GetOrderSummary)(nil)); !errors.Is(
 		err, query.ErrNilQuery,

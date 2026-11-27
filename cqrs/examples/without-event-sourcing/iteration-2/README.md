@@ -12,7 +12,7 @@ Each write flows cleanly through three responsibilities:
 ```text
 iteration-2/
 ├── generate.go                              # //go:generate protoc directives
-├── main.go                                  # Composition root (DB, ACL adapters, buses, run)
+├── main.go                                  # Thin entrypoint running sample commands & queries
 ├── main_test.go                             # End-to-end tests + nil-proto ACL safety
 ├── commands/                                # Public Protobuf command contracts
 │   ├── place_order.proto
@@ -25,6 +25,8 @@ iteration-2/
 │   ├── order_summary.proto
 │   └── order_summary.pb.go
 └── internal/
+    ├── bootstrap/                           # Composition root (DB, ACL adapters, middlewares, buses)
+    │   └── bootstrap.go
     ├── domain/                              # Entity, invariants, errors, repository port (zero command structs)
     │   ├── errors.go
     │   ├── order.go
@@ -53,7 +55,7 @@ iteration-2/
 - Uses `command.Func` cleanly at the infra boundary (`internal/infra/acl`) without putting orchestration or business rules inside ACL code.
 - Keeps `internal/domain` purely focused on entity state, invariants, and repository ports.
 - See [`../iteration-1/`](../iteration-1/) if you want plain Go structs with zero translation boilerplate.
-- See [`../iteration-3/`](../iteration-3/) for a pure `internal/domain` Decider + generic `internal/infra/persistence` runner tested via `cqrs/spectest`.
+- See [`../iteration-3/`](../iteration-3/) for a pure `internal/domain` Decider + `eventsalsa.dev/cqrs/persistence` (`FromStateRepository`, `NewCommandHandler`) tested via `cqrs/spectest`.
 
 ## Run
 

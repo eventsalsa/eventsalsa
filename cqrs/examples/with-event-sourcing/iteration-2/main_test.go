@@ -10,6 +10,7 @@ import (
 	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/commands"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/application"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/domain"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/infra/acl"
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/infra/queries"
@@ -76,7 +77,7 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 	var rejected []error
 	bus, err := command.NewBus(
 		command.WithMiddleware(command.ObservabilityMiddleware()),
-		command.WithErrorClassifier(classifyDomainError),
+		command.WithErrorClassifier(bootstrap.ClassifyDomainError),
 		command.WithOnRejected(func(_ context.Context, _ any, rejErr error) {
 			rejected = append(rejected, rejErr)
 		}),
@@ -84,8 +85,8 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBus: %v", err)
 	}
-	if regErr := registerCommandHandlers(bus, repo); regErr != nil {
-		t.Fatalf("registerCommandHandlers: %v", regErr)
+	if regErr := bootstrap.RegisterCommandHandlers(bus, repo); regErr != nil {
+		t.Fatalf("RegisterCommandHandlers: %v", regErr)
 	}
 
 	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
@@ -150,9 +151,9 @@ func TestIteration2ACLNilSafety(t *testing.T) {
 		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
 	}
 
-	qBus, err := newQueryBus(nil)
+	qBus, err := bootstrap.NewQueryBus(nil)
 	if err != nil {
-		t.Fatalf("newQueryBus: %v", err)
+		t.Fatalf("NewQueryBus: %v", err)
 	}
 	if _, err := query.Execute[*queries.OrderOverview](ctx, qBus, (*queries.GetOrderOverview)(nil)); !errors.Is(
 		err, query.ErrNilQuery,

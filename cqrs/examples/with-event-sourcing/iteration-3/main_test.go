@@ -11,6 +11,7 @@ import (
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/commands"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/bootstrap"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/acl"
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/queries"
@@ -74,7 +75,7 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 				},
 			}),
 		),
-		command.WithErrorClassifier(classifyDomainError),
+		command.WithErrorClassifier(bootstrap.ClassifyDomainError),
 		command.WithOnRejected(func(_ context.Context, _ any, rejErr error) {
 			rejected = append(rejected, rejErr)
 		}),
@@ -82,8 +83,8 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBus: %v", err)
 	}
-	if regErr := registerCommandHandlers(bus, repo); regErr != nil {
-		t.Fatalf("registerCommandHandlers: %v", regErr)
+	if regErr := bootstrap.RegisterCommandHandlers(bus, repo); regErr != nil {
+		t.Fatalf("RegisterCommandHandlers: %v", regErr)
 	}
 
 	// PlaceOrder recovers cleanly from the injected OCC conflict on retry.
@@ -165,9 +166,9 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
 	}
 
-	qBus, err := newQueryBus(nil)
+	qBus, err := bootstrap.NewQueryBus(nil)
 	if err != nil {
-		t.Fatalf("newQueryBus: %v", err)
+		t.Fatalf("NewQueryBus: %v", err)
 	}
 	if _, err := query.Execute[*queries.OrderOverview](ctx, qBus, (*queries.GetOrderOverview)(nil)); !errors.Is(
 		err, query.ErrNilQuery,
