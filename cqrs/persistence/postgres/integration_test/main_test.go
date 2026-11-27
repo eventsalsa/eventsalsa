@@ -17,6 +17,7 @@ import (
 
 	"eventsalsa.dev/cqrs/persistence"
 	"eventsalsa.dev/cqrs/persistence/postgres"
+	snapshotmigrations "eventsalsa.dev/snapshot/migrations"
 	"eventsalsa.dev/store"
 	"eventsalsa.dev/store/migrations"
 )
@@ -115,6 +116,13 @@ func ensureSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	}
 	if _, err := pool.Exec(ctx, ddl); err != nil {
 		t.Fatalf("install store DDL: %v", err)
+	}
+	snapDDL, err := snapshotmigrations.FS.ReadFile("20260621084951_init_snapshots.sql")
+	if err != nil {
+		t.Fatalf("read snapshot DDL: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(snapDDL)); err != nil {
+		t.Fatalf("install snapshot DDL: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS order_overview_v1 (

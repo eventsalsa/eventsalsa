@@ -99,6 +99,32 @@ func (r *OrderRepo) Save(ctx context.Context, id string, expectedVersion int64, 
 dispatchCtx := postgres.ContextWithEventCausation(ctx, persistedEvent)
 ```
 
+### Snapshotted Event Sourcing (`eventsalsa/snapshot`)
+
+Pair `eventsalsa.dev/snapshot` (`snapshotpostgres.NewStore(...)`) with `NewSnapshotAdapter` (narrow) or `NewTxSnapshotAdapter` (wide) to get a standard `persistence.Adapter[S, E]` usable with `persistence.NewCommandHandler`:
+
+```go
+snapStore := snapshotpostgres.NewStore(snapshotpostgres.DefaultStoreConfig())
+orders, err := postgres.NewSnapshotAdapter(postgres.SnapshotAdapterConfig[domain.Order, any]{
+	EventRepository: postgres.EventRepositoryConfig[any]{
+		DB:          pool,
+		EventStore:  es,
+		StreamType:  "Order",
+		Codec:       codec,
+		Projections: []postgres.Projection{&OrderOverviewProjection{}},
+	},
+	Decider: decider,
+	Snapshot: postgres.SnapshotConfig[domain.Order]{
+		Store:         snapStore,
+		Codec:         snapshot.JSON[domain.Order](),
+		SchemaVersion: 1,
+		Policy:        snapshot.EveryNEvents(50),
+	},
+})
+```
+
+Snapshot writes run inside a PostgreSQL savepoint by default (`FailOnSnapshotSaveError: false`), so transient snapshot/KMS errors invoke `OnSnapshotSaveError` without rolling back valid domain events (set `FailOnSnapshotSaveError: true` for atomic all-or-nothing rollback).
+
 ## Development
 
 ```bash
