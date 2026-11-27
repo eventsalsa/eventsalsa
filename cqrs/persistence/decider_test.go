@@ -43,6 +43,28 @@ func decideAdd(_ counterState, c addCmd) ([]any, error) {
 	return []any{counterIncremented{delta: c.delta}}, nil
 }
 
+type trailState struct {
+	id    string
+	trail string
+}
+
+type trailStepCmd struct {
+	id    string
+	steps []string
+}
+
+func trailDecider() persistence.Decider[trailState, string] {
+	return persistence.Decider[trailState, string]{
+		Initial: func(id string) trailState {
+			return trailState{id: id, trail: "init:" + id}
+		},
+		Evolve: func(state trailState, ev string) trailState {
+			state.trail += ">" + ev
+			return state
+		},
+	}
+}
+
 func TestNewCommandHandler_Validation(t *testing.T) {
 	t.Parallel()
 
@@ -106,8 +128,10 @@ func TestCommandHandler_InputGuards(t *testing.T) {
 	ctx := context.Background()
 	d := counterDecider()
 
-	stateH := persistence.MustNewCommandHandler(persistence.FromStateRepository(newSpyStateRepo(), d), addID, decideAdd)
-	eventH := persistence.MustNewCommandHandler(persistence.FromEventRepository(newSpyEventRepo(), d), addID, decideAdd)
+	stateRepo := newSpyStateRepo()
+	eventRepo := newSpyEventRepo()
+	stateH := persistence.MustNewCommandHandler(persistence.FromStateRepository(stateRepo, d), addID, decideAdd)
+	eventH := persistence.MustNewCommandHandler(persistence.FromEventRepository(eventRepo, d), addID, decideAdd)
 
 	for _, tc := range []struct {
 		name    string
@@ -119,14 +143,18 @@ func TestCommandHandler_InputGuards(t *testing.T) {
 		{name: "empty id", ctx: ctx, cmd: addCmd{id: "", delta: 1}, wantErr: persistence.ErrEmptyTargetID},
 		{name: "blank id", ctx: ctx, cmd: addCmd{id: "  \t ", delta: 1}, wantErr: persistence.ErrEmptyTargetID},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if err := stateH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("stateH err = %v, want %v", err, tc.wantErr)
-			}
-			if err := eventH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("eventH err = %v, want %v", err, tc.wantErr)
-			}
-		})
+		if err := stateH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
+			t.Fatalf("%s stateH err = %v, want %v", tc.name, err, tc.wantErr)
+		}
+		if err := eventH.Handle(tc.ctx, tc.cmd); !errors.Is(err, tc.wantErr) {
+			t.Fatalf("%s eventH err = %v, want %v", tc.name, err, tc.wantErr)
+		}
+	}
+
+	if stateRepo.loadCalls != 0 || stateRepo.saveCalls != 0 {
+		t.Fatalf("stateRepo should not be touched on invalid inputs, got load=%d save=%d", stateRepo.loadCalls, stateRepo.saveCalls)
+	}
+	if eventRepo.loadCalls != 0 || eventRepo.appendCalls != 0 {
+		t.Fatalf("eventRepo should not be touched on invalid inputs, got load=%d append=%d", eventRepo.loadCalls, eventRepo.appendCalls)
 	}
 }

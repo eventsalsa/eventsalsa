@@ -37,8 +37,9 @@ func newApp() (*wiredApp, error) {
 	}, nil
 }
 
-func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
-	bus, err := command.NewBus(
+func newCommandBus(db *persistence.MemoryDB, extraOpts ...command.BusOption) (*command.Bus, error) {
+	opts := make([]command.BusOption, 0, 3+len(extraOpts))
+	opts = append(opts,
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
@@ -64,6 +65,9 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 				cqrs.TraceIDFromContext(ctx), rejected, err)
 		}),
 	)
+	opts = append(opts, extraOpts...)
+
+	bus, err := command.NewBus(opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -78,6 +78,42 @@ func TestWrapAndNilGuards(t *testing.T) {
 	if res.Name != "Ada:42" || !slices.Equal(trace, []string{"mw1", "mw2", "handler"}) {
 		t.Fatalf("unexpected res=%+v trace=%v", res, trace)
 	}
+
+	// Wrap propagates handler errors and rejects middleware-corrupted result types.
+	errQuery := errors.New("query failed")
+	wrappedErr, err := query.Wrap(
+		query.Func[testProfileQuery, testProfileResult](func(context.Context, testProfileQuery) (testProfileResult, error) {
+			return testProfileResult{}, errQuery
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Wrap err path: %v", err)
+	}
+	if _, hErr := wrappedErr.Handle(context.Background(), testProfileQuery{}); !errors.Is(hErr, errQuery) {
+		t.Fatalf("Wrap error propagation got %v, want %v", hErr, errQuery)
+	}
+
+	wrappedCorrupted, err := query.Wrap(
+		query.Func[testProfileQuery, testProfileResult](func(context.Context, testProfileQuery) (testProfileResult, error) {
+			return testProfileResult{Name: "ok"}, nil
+		}),
+		func(next query.UntypedFunc) query.UntypedFunc {
+			return func(ctx context.Context, q any) (any, error) {
+				if _, nextErr := next(ctx, q); nextErr != nil {
+					return nil, nextErr
+				}
+				return "wrong-result-type", nil
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("Wrap corrupted path: %v", err)
+	}
+	if _, hErr := wrappedCorrupted.Handle(context.Background(), testProfileQuery{}); !errors.Is(
+		hErr, query.ErrInvalidResultType,
+	) {
+		t.Fatalf("Wrap corrupted result got %v, want ErrInvalidResultType", hErr)
+	}
 }
 
 func TestBus_ExecuteHappyAndFailPaths(t *testing.T) {

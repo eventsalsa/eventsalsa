@@ -3,6 +3,7 @@ package persistence_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,35 +13,54 @@ import (
 	"eventsalsa.dev/cqrs/persistence"
 )
 
-type spyEventRepo struct {
+type genericEventRepo[E any] struct {
 	mu                sync.RWMutex
-	streams           map[string][]any
+	streams           map[string][]E
 	loadErr           error
 	appendErr         error
+	beforeAppend      func(id string, expected int64)
 	forceNegVersion   bool
+	loadCalls         int
 	appendCalls       int
 	lastExpected      int64
 	failNextConflicts atomic.Int32
 }
 
-func newSpyEventRepo() *spyEventRepo {
-	return &spyEventRepo{streams: make(map[string][]any)}
+type spyEventRepo = genericEventRepo[any]
+
+func newGenericEventRepo[E any]() *genericEventRepo[E] {
+	return &genericEventRepo[E]{streams: make(map[string][]E)}
 }
 
-func (r *spyEventRepo) Load(_ context.Context, id string) (events []any, version int64, err error) {
-	if r.loadErr != nil {
-		return nil, 0, r.loadErr
+func newSpyEventRepo() *spyEventRepo {
+	return newGenericEventRepo[any]()
+}
+
+func (r *genericEventRepo[E]) Load(_ context.Context, id string) (events []E, version int64, err error) {
+	r.mu.Lock()
+	r.loadCalls++
+	loadErr := r.loadErr
+	forceNeg := r.forceNegVersion
+	evs := slices.Clone(r.streams[id])
+	r.mu.Unlock()
+
+	if loadErr != nil {
+		return nil, 0, loadErr
 	}
-	if r.forceNegVersion {
+	if forceNeg {
 		return nil, -1, nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	evs := r.streams[id]
-	return append([]any(nil), evs...), int64(len(evs)), nil
+	return evs, int64(len(evs)), nil
 }
 
-func (r *spyEventRepo) Append(_ context.Context, id string, expectedVersion int64, events []any) error {
+func (r *genericEventRepo[E]) Append(_ context.Context, id string, expectedVersion int64, events []E) error {
+	r.mu.Lock()
+	beforeAppend := r.beforeAppend
+	r.mu.Unlock()
+	if beforeAppend != nil {
+		beforeAppend(id, expectedVersion)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.appendCalls++
@@ -57,7 +77,7 @@ func (r *spyEventRepo) Append(_ context.Context, id string, expectedVersion int6
 	if int64(len(current)) != expectedVersion {
 		return persistence.ErrConcurrencyConflict
 	}
-	r.streams[id] = append(current, events...)
+	r.streams[id] = append(slices.Clone(current), events...)
 	return nil
 }
 
@@ -71,7 +91,7 @@ func TestFromEventRepository_LifecycleAndGuards(t *testing.T) {
 	errRejected := errors.New("rejected")
 	handler := persistence.MustNewCommandHandler(adapter, addID, func(_ counterState, c addCmd) ([]any, error) {
 		if c.delta < 0 {
-			return nil, errRejected
+			return []any{counterIncremented{delta: c.delta}}, errRejected
 		}
 		if c.delta == 0 {
 			return nil, nil
@@ -104,7 +124,7 @@ func TestFromEventRepository_LifecycleAndGuards(t *testing.T) {
 	}
 	repo.forceNegVersion = false
 
-	// First append uses expectedVersion = 0; zero-event no-op skips Append; second appends at 1.
+	// First append uses expectedVersion = 0; zero-event and error decide results skip Append.
 	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 5}); err != nil {
 		t.Fatalf("first Handle failed: %v", err)
 	}
@@ -120,29 +140,78 @@ func TestFromEventRepository_LifecycleAndGuards(t *testing.T) {
 		t.Fatalf("decide err=%v appendCalls=%d", err, repo.appendCalls)
 	}
 
+	// Non-OCC Append failure propagates cleanly.
+	errAppendIO := errors.New("append I/O error")
+	repo.appendErr = errAppendIO
+	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 2}); !errors.Is(err, errAppendIO) {
+		t.Fatalf("appendErr = %v, want %v", err, errAppendIO)
+	}
+	repo.appendErr = nil
+
 	if err := handler.Handle(ctx, addCmd{id: "s-1", delta: 3}); err != nil {
 		t.Fatalf("second Handle failed: %v", err)
 	}
-	if repo.lastExpected != 1 || repo.appendCalls != 3 || len(repo.streams["s-1"]) != 2 {
+	if repo.lastExpected != 1 || repo.appendCalls != 4 || len(repo.streams["s-1"]) != 2 {
 		t.Fatalf("after second Handle: lastExpected=%d appendCalls=%d len=%d", repo.lastExpected, repo.appendCalls, len(repo.streams["s-1"]))
 	}
 }
 
-func TestFromEventRepository_RetryMiddlewareAndCommandBusIntegration(t *testing.T) {
+func TestFromEventRepository_ReconstitutesOrderedHistoryBeforeDecide(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo := newGenericEventRepo[string]()
+	repo.streams["ord-seq"] = []string{"placed", "paid"}
+
+	var observedTrail string
+	handler := persistence.MustNewCommandHandler(
+		persistence.FromEventRepository(repo, trailDecider()),
+		func(c trailStepCmd) string { return c.id },
+		func(state trailState, c trailStepCmd) ([]string, error) {
+			if state.id != c.id {
+				return nil, errors.New("Initial(id) was not propagated to decide")
+			}
+			observedTrail = state.trail
+			return c.steps, nil
+		},
+	)
+
+	if err := handler.Handle(ctx, trailStepCmd{id: "ord-seq", steps: []string{"packed", "shipped"}}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if observedTrail != "init:ord-seq>placed>paid" {
+		t.Fatalf("observedTrail = %q, want %q", observedTrail, "init:ord-seq>placed>paid")
+	}
+	wantStream := []string{"placed", "paid", "packed", "shipped"}
+	if !slices.Equal(repo.streams["ord-seq"], wantStream) || repo.lastExpected != 2 {
+		t.Fatalf("stream=%v expected=%d, want %v expected=2", repo.streams["ord-seq"], repo.lastExpected, wantStream)
+	}
+}
+
+func TestFromEventRepository_CompetingWriterReloadsAndClassifies(t *testing.T) {
 	t.Parallel()
 
 	repo := newSpyEventRepo()
-	repo.failNextConflicts.Store(2)
+	var raced atomic.Bool
+	repo.beforeAppend = func(id string, expected int64) {
+		if id == "ctr-race" && expected == 0 && raced.CompareAndSwap(false, true) {
+			repo.mu.Lock()
+			repo.streams[id] = []any{counterIncremented{delta: 100}}
+			repo.mu.Unlock()
+		}
+	}
 
-	errInvalidDelta := errors.New("delta must be positive")
+	errAlreadyCapped := errors.New("counter capped")
+	var seenCounts []int
 	handler := persistence.MustNewCommandHandler(
 		persistence.FromEventRepository(repo, counterDecider()),
 		addID,
-		func(_ counterState, c addCmd) ([]any, error) {
-			if c.delta <= 0 {
-				return nil, errInvalidDelta
+		func(state counterState, c addCmd) ([]any, error) {
+			seenCounts = append(seenCounts, state.count)
+			if state.count >= 100 && c.delta > 50 {
+				return nil, errAlreadyCapped
 			}
-			return []any{counterIncremented{delta: c.delta}}, nil
+			return decideAdd(state, c)
 		},
 	)
 
@@ -151,14 +220,14 @@ func TestFromEventRepository_RetryMiddlewareAndCommandBusIntegration(t *testing.
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
-				MaxAttempts: 3,
+				MaxAttempts: 2,
 				RetryIf: func(err error) bool {
 					return errors.Is(err, persistence.ErrConcurrencyConflict)
 				},
 			}),
 		),
 		command.WithErrorClassifier(func(err error) error {
-			if errors.Is(err, errInvalidDelta) {
+			if errors.Is(err, errAlreadyCapped) {
 				return command.Reject(err)
 			}
 			return err
@@ -173,22 +242,39 @@ func TestFromEventRepository_RetryMiddlewareAndCommandBusIntegration(t *testing.
 	command.MustRegister(bus, handler)
 
 	ctx := cqrs.WithTraceID(context.Background(), "trace-occ")
-	if dispatchErr := bus.Dispatch(ctx, addCmd{id: "ctr-occ", delta: 10}); dispatchErr != nil {
-		t.Fatalf("Dispatch retry failed: %v", dispatchErr)
+	// Competing commit advances ctr-race to version 1; retry reloads count=100 and appends +10.
+	if dispatchErr := bus.Dispatch(ctx, addCmd{id: "ctr-race", delta: 10}); dispatchErr != nil {
+		t.Fatalf("Dispatch race retry failed: %v", dispatchErr)
 	}
-	if repo.appendCalls != 3 {
-		t.Fatalf("appendCalls = %d, want 3 (2 conflicts + 1 success)", repo.appendCalls)
+	if !slices.Equal(seenCounts, []int{0, 100}) {
+		t.Fatalf("seenCounts = %v, want [0 100]", seenCounts)
 	}
-
-	if dispatchErr := bus.Dispatch(ctx, addCmd{id: "ctr-occ", delta: 0}); dispatchErr != nil {
-		t.Fatalf("rejected Dispatch should be masked, got: %v", dispatchErr)
-	}
-	if len(rejected) != 1 || !errors.Is(rejected[0], errInvalidDelta) {
-		t.Fatalf("rejected = %v, want [errInvalidDelta]", rejected)
+	events, ver, loadErr := repo.Load(ctx, "ctr-race")
+	if loadErr != nil || ver != 2 || len(events) != 2 {
+		t.Fatalf("Load = (%v, %d, %v), want 2 events ver=2", events, ver, loadErr)
 	}
 
-	events, ver, loadErr := repo.Load(ctx, "ctr-occ")
-	if loadErr != nil || ver != 1 || len(events) != 1 {
-		t.Fatalf("Load = (%v, %d, %v), want 1 event ver=1", events, ver, loadErr)
+	// Competing commit on a fresh stream violates domain invariant upon retry and is rejected cleanly.
+	raced.Store(false)
+	seenCounts = nil
+	repo.beforeAppend = func(id string, expected int64) {
+		if id == "ctr-cap" && expected == 0 && raced.CompareAndSwap(false, true) {
+			repo.mu.Lock()
+			repo.streams[id] = []any{counterIncremented{delta: 100}}
+			repo.mu.Unlock()
+		}
+	}
+	if dispatchErr := bus.Dispatch(ctx, addCmd{id: "ctr-cap", delta: 60}); dispatchErr != nil {
+		t.Fatalf("rejected Dispatch after reload should be masked, got: %v", dispatchErr)
+	}
+	if len(rejected) != 1 || !errors.Is(rejected[0], errAlreadyCapped) {
+		t.Fatalf("rejected = %v, want [errAlreadyCapped]", rejected)
+	}
+
+	// Exhausting MaxAttempts returns ErrConcurrencyConflict untouched.
+	repo.beforeAppend = nil
+	repo.failNextConflicts.Store(5)
+	if dispatchErr := bus.Dispatch(ctx, addCmd{id: "ctr-race", delta: 1}); !errors.Is(dispatchErr, persistence.ErrConcurrencyConflict) {
+		t.Fatalf("exhausted retries err = %v, want %v", dispatchErr, persistence.ErrConcurrencyConflict)
 	}
 }

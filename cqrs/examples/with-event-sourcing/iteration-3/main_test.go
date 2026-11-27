@@ -12,11 +12,13 @@ import (
 	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/commands"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/domain"
+	domainevents "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/domain/events"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/acl"
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/internal/infra/queries"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/queries"
 	"eventsalsa.dev/cqrs/persistence"
 	"eventsalsa.dev/cqrs/query"
+	"eventsalsa.dev/store"
 )
 
 type stubEventRepository struct {
@@ -69,9 +71,7 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
 				MaxAttempts: 3,
-				RetryIf: func(err error) bool {
-					return errors.Is(err, persistence.ErrConcurrencyConflict)
-				},
+				RetryIf:     isRetryableError,
 			}),
 		),
 		command.WithErrorClassifier(classifyDomainError),
@@ -98,7 +98,14 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 		t.Fatalf("appendCalls after OCC retry = %d, want 2", repo.appendCalls)
 	}
 
-	// Duplicate PlaceOrder and unplaced ConfirmOrder are masked as domain rejections.
+	// Invalid amount, duplicate PlaceOrder, and unplaced ConfirmOrder are masked as domain rejections.
+	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
+		OrderId:    "ord-invalid",
+		CustomerId: "cust-42",
+		TotalCents: 0,
+	}); dispatchErr != nil {
+		t.Fatalf("invalid PlaceOrder should mask rejection, got: %v", dispatchErr)
+	}
 	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
 		OrderId:    "ord-1",
 		CustomerId: "cust-42",
@@ -109,8 +116,11 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 	if dispatchErr := bus.Dispatch(ctx, &commands.ConfirmOrder{OrderId: "missing"}); dispatchErr != nil {
 		t.Fatalf("missing ConfirmOrder should mask rejection, got: %v", dispatchErr)
 	}
-	if len(rejected) != 2 || !errors.Is(rejected[0], domain.ErrAlreadyPlaced) || !errors.Is(rejected[1], domain.ErrNotPlaced) {
-		t.Fatalf("rejected = %v, want [ErrAlreadyPlaced, ErrNotPlaced]", rejected)
+	if len(rejected) != 3 ||
+		!errors.Is(rejected[0], domain.ErrInvalidAmount) ||
+		!errors.Is(rejected[1], domain.ErrAlreadyPlaced) ||
+		!errors.Is(rejected[2], domain.ErrNotPlaced) {
+		t.Fatalf("rejected = %v, want [ErrInvalidAmount, ErrAlreadyPlaced, ErrNotPlaced]", rejected)
 	}
 
 	if dispatchErr := bus.Dispatch(ctx, &commands.ConfirmOrder{OrderId: "ord-1"}); dispatchErr != nil {
@@ -128,6 +138,26 @@ func TestIteration3ACLAndDeciderFlow(t *testing.T) {
 	history, ver, loadErr := repo.Load(ctx, "ord-1")
 	if loadErr != nil || ver != 2 || len(history) != 2 {
 		t.Fatalf("Load = (%v, %d, %v), want 2 events ver=2", history, ver, loadErr)
+	}
+	wantPlaced := domainevents.OrderPlaced{CustomerID: "cust-42", TotalCents: 2500}
+	if placed, ok := history[0].(domainevents.OrderPlaced); !ok || placed != wantPlaced {
+		t.Fatalf("history[0] = %#v, want %#v", history[0], wantPlaced)
+	}
+	if _, ok := history[1].(domainevents.OrderConfirmed); !ok {
+		t.Fatalf("history[1] = %#v, want domainevents.OrderConfirmed", history[1])
+	}
+
+	if !isRetryableError(persistence.ErrConcurrencyConflict) || !isRetryableError(store.ErrOptimisticConcurrency) {
+		t.Fatal("expected retry predicate to cover both persistence and store concurrency errors")
+	}
+	if isRetryableError(domain.ErrAlreadyPlaced) {
+		t.Fatal("domain rejection must not be retried")
+	}
+	if !command.IsRejected(classifyDomainError(acl.ErrEmptyCommand)) {
+		t.Fatal("ErrEmptyCommand must be classified as rejection")
+	}
+	if command.IsRejected(classifyDomainError(persistence.ErrConcurrencyConflict)) {
+		t.Fatal("concurrency conflict must not be classified as rejection")
 	}
 }
 

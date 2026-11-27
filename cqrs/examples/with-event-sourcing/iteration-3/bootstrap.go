@@ -58,6 +58,11 @@ func openApp(ctx context.Context, dsn string) (*wiredApp, error) {
 	}, nil
 }
 
+func isRetryableError(err error) bool {
+	return errors.Is(err, persistence.ErrConcurrencyConflict) ||
+		errors.Is(err, store.ErrOptimisticConcurrency)
+}
+
 func classifyDomainError(err error) error {
 	if errors.Is(err, domain.ErrAlreadyPlaced) ||
 		errors.Is(err, domain.ErrNotPlaced) ||
@@ -104,10 +109,7 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
 				MaxAttempts: 3,
-				RetryIf: func(err error) bool {
-					return errors.Is(err, persistence.ErrConcurrencyConflict) ||
-						errors.Is(err, store.ErrOptimisticConcurrency)
-				},
+				RetryIf:     isRetryableError,
 			}),
 			infrapersistence.WithPgxTx(pool),
 		),

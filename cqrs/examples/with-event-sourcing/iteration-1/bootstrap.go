@@ -56,6 +56,23 @@ func openApp(ctx context.Context, dsn string) (*wiredApp, error) {
 	}, nil
 }
 
+func classifyDomainError(err error) error {
+	if errors.Is(err, domain.ErrAlreadyPlaced) ||
+		errors.Is(err, domain.ErrOrderNotFound) ||
+		errors.Is(err, domain.ErrNotPlaced) ||
+		errors.Is(err, domain.ErrInvalidAmount) {
+		return command.Reject(err)
+	}
+	return err
+}
+
+func registerCommandHandlers(bus *command.Bus, orders domain.OrderRepository) error {
+	if regErr := command.Register(bus, &application.PlaceOrderHandler{Orders: orders}); regErr != nil {
+		return regErr
+	}
+	return command.Register(bus, &application.ConfirmOrderHandler{Orders: orders})
+}
+
 func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
@@ -68,15 +85,7 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 			}),
 			infra.WithPgxTx(pool),
 		),
-		command.WithErrorClassifier(func(err error) error {
-			if errors.Is(err, domain.ErrAlreadyPlaced) ||
-				errors.Is(err, domain.ErrOrderNotFound) ||
-				errors.Is(err, domain.ErrNotPlaced) ||
-				errors.Is(err, domain.ErrInvalidAmount) {
-				return command.Reject(err)
-			}
-			return err
-		}),
+		command.WithErrorClassifier(classifyDomainError),
 	)
 	if err != nil {
 		return nil, err
@@ -86,10 +95,7 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		Store:      es,
 		Projection: &infra.OrderOverviewProjection{},
 	}
-	if regErr := command.Register(bus, &application.PlaceOrderHandler{Orders: orders}); regErr != nil {
-		return nil, regErr
-	}
-	if regErr := command.Register(bus, &application.ConfirmOrderHandler{Orders: orders}); regErr != nil {
+	if regErr := registerCommandHandlers(bus, orders); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil

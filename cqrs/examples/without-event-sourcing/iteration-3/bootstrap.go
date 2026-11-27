@@ -37,36 +37,44 @@ func newApp() (*wiredApp, error) {
 	}, nil
 }
 
-func newCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
-	bus, err := command.NewBus(
+func isRetryableError(err error) bool {
+	return errors.Is(err, infrapersistence.ErrTransientWrite) ||
+		errors.Is(err, persistence.ErrConcurrencyConflict)
+}
+
+func classifyDomainError(err error) error {
+	if errors.Is(err, domain.ErrAlreadyPlaced) ||
+		errors.Is(err, domain.ErrNotPlaced) ||
+		errors.Is(err, domain.ErrAlreadyCanceled) ||
+		errors.Is(err, domain.ErrInvalidOrderTotal) ||
+		errors.Is(err, domain.ErrCancellationReasonRequired) ||
+		errors.Is(err, acl.ErrEmptyCommand) {
+		return command.Reject(err)
+	}
+	return err
+}
+
+func newCommandBus(db *infrapersistence.MemoryDB, extraOpts ...command.BusOption) (*command.Bus, error) {
+	opts := make([]command.BusOption, 0, 3+len(extraOpts))
+	opts = append(opts,
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
 				MaxAttempts: 3,
 				BaseBackoff: 5 * time.Millisecond,
 				MaxBackoff:  25 * time.Millisecond,
-				RetryIf: func(err error) bool {
-					return errors.Is(err, infrapersistence.ErrTransientWrite) ||
-						errors.Is(err, persistence.ErrConcurrencyConflict)
-				},
+				RetryIf:     isRetryableError,
 			}),
 		),
-		command.WithErrorClassifier(func(err error) error {
-			if errors.Is(err, domain.ErrAlreadyPlaced) ||
-				errors.Is(err, domain.ErrNotPlaced) ||
-				errors.Is(err, domain.ErrAlreadyCanceled) ||
-				errors.Is(err, domain.ErrInvalidOrderTotal) ||
-				errors.Is(err, domain.ErrCancellationReasonRequired) ||
-				errors.Is(err, acl.ErrEmptyCommand) {
-				return command.Reject(err)
-			}
-			return err
-		}),
+		command.WithErrorClassifier(classifyDomainError),
 		command.WithOnRejected(func(ctx context.Context, rejected any, err error) {
 			fmt.Printf("Command rejected: trace_id=%s command_type=%T err=%v\n",
 				cqrs.TraceIDFromContext(ctx), rejected, err)
 		}),
 	)
+	opts = append(opts, extraOpts...)
+
+	bus, err := command.NewBus(opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -72,6 +72,22 @@ func TestWrapAndNilGuards(t *testing.T) {
 	if !slices.Equal(order, want) {
 		t.Fatalf("got order %v, want %v", order, want)
 	}
+
+	// Middleware altering cmd to an incompatible type fails type assertion cleanly.
+	corrupted, err := command.Wrap(
+		command.Func[testCreateCmd](func(context.Context, testCreateCmd) error { return nil }),
+		func(next command.UntypedFunc) command.UntypedFunc {
+			return func(ctx context.Context, _ any) error {
+				return next(ctx, "wrong-type")
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("Wrap corrupted: %v", err)
+	}
+	if handleErr := corrupted.Handle(context.Background(), testCreateCmd{ID: "c1"}); handleErr == nil {
+		t.Fatal("expected type mismatch error when middleware replaces command type")
+	}
 }
 
 func TestBus_RegistrationAndPreDispatchFailures(t *testing.T) {
@@ -285,6 +301,53 @@ func TestBus_ErrorPoliciesAndMiddlewareOrder(t *testing.T) {
 		got := bus.Dispatch(context.Background(), domainCmd{})
 		if !errors.Is(got, errDomain) || !command.IsRejected(got) {
 			t.Fatalf("expected raw rejected errDomain, got %v", got)
+		}
+	})
+
+	t.Run("classifier returning nil or non-rejected error, omitted hook, and corrupted bus cmd", func(t *testing.T) {
+		t.Parallel()
+
+		bus, err := command.NewBus(
+			command.WithMiddleware(func(next command.UntypedFunc) command.UntypedFunc {
+				return func(ctx context.Context, cmd any) error {
+					if d, ok := cmd.(domainCmd); ok && d.Fail == "corrupt-type" {
+						return next(ctx, 42)
+					}
+					return next(ctx, cmd)
+				}
+			}),
+			command.WithErrorClassifier(func(e error) error {
+				if errors.Is(e, errInfra) {
+					return nil
+				}
+				return e
+			}),
+		)
+		if err != nil {
+			t.Fatalf("NewBus: %v", err)
+		}
+		command.MustRegister(bus, command.Func[domainCmd](func(_ context.Context, c domainCmd) error {
+			switch c.Fail {
+			case "rejected-no-hook":
+				return command.Reject(errDomain)
+			case "infra":
+				return errInfra
+			default:
+				return nil
+			}
+		}))
+
+		// Rejection with nil onRejected callback still masks to nil.
+		if dErr := bus.Dispatch(context.Background(), domainCmd{Fail: "rejected-no-hook"}); dErr != nil {
+			t.Fatalf("expected nil return without onRejected hook, got %v", dErr)
+		}
+		// Classifier returning nil preserves original err.
+		if dErr := bus.Dispatch(context.Background(), domainCmd{Fail: "infra"}); !errors.Is(dErr, errInfra) {
+			t.Fatalf("expected original errInfra when classifier returns nil, got %v", dErr)
+		}
+		// Bus middleware replacing cmd type fails Register handler type assertion.
+		if dErr := bus.Dispatch(context.Background(), domainCmd{Fail: "corrupt-type"}); dErr == nil {
+			t.Fatal("expected type mismatch error when bus middleware replaces command type")
 		}
 	})
 }
