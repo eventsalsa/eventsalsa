@@ -3,13 +3,16 @@ package infra
 import (
 	"context"
 
+	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain"
 	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
 )
 
-// OrderEventStore implements application.OrderEventStore using eventsalsa/store and
-// an inline PostgreSQL read-model projection inside the active command transaction.
+const streamTypeOrder = "Order"
+
+// OrderEventStore implements application.OrderEventStore using eventsalsa/store,
+// eventmap-gen mappings, and an inline PostgreSQL read-model projection inside the tx.
 type OrderEventStore struct {
 	Store *storepostgres.Store
 }
@@ -26,8 +29,7 @@ func (s *OrderEventStore) Load(ctx context.Context, orderID string) (domain.Orde
 	}
 	state := domain.InitialOrder(orderID)
 	for i := range stream.Events {
-		ev := &stream.Events[i]
-		domainEv, decErr := decodeDomainEvent(ev.EventType, ev.Payload)
+		domainEv, decErr := FromESEvent(stream.Events[i])
 		if decErr != nil {
 			return domain.OrderState{}, 0, decErr
 		}
@@ -36,22 +38,32 @@ func (s *OrderEventStore) Load(ctx context.Context, orderID string) (domain.Orde
 	return state, stream.Version(), nil
 }
 
-// Append encodes domain events, appends them optimistically to eventsalsa/store,
+// Append maps domain events via eventmap-gen, appends them optimistically to eventsalsa/store,
 // and updates order_overview_v1 atomically in the same transaction.
 func (s *OrderEventStore) Append(
 	ctx context.Context,
 	orderID string,
 	expectedVersion int64,
-	events []any,
+	domainEvents []any,
 ) error {
 	tx, err := txFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	toAppend, err := encodeStoreEvents(ctx, orderID, events)
+
+	var opts []Option
+	if tid := cqrs.TraceIDFromContext(ctx); tid != "" {
+		opts = append(opts, WithTraceID(tid))
+	}
+	if cid := cqrs.CommandIDFromContext(ctx); cid != "" {
+		opts = append(opts, WithCausationID(cid))
+	}
+
+	toAppend, err := ToESEvents(streamTypeOrder, orderID, domainEvents, opts...)
 	if err != nil {
 		return err
 	}
+
 	expected := store.NoStream()
 	if expectedVersion > 0 {
 		expected = store.Exact(expectedVersion)

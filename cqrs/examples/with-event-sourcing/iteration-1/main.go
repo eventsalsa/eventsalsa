@@ -1,10 +1,11 @@
 // Package main demonstrates CQRS combined with Event Sourcing over eventsalsa/store.
 //
 // Top-level commands/ and queries/ export plain Go contracts; internal/domain holds
-// pure InitialOrder/EvolveOrder/Place/Confirm rules; internal/application orchestrates
-// writes through OrderEventStore; and internal/infra executes commands inside a
-// PostgreSQL transaction middleware, appends events with optimistic concurrency and
-// causal metadata, and projects inline into order_overview_v1.
+// pure InitialOrder/EvolveOrder/Place/Confirm rules over internal/domain/events;
+// internal/application orchestrates writes through OrderEventStore; and internal/infra
+// executes commands inside a PostgreSQL transaction middleware, maps events via
+// eventmap-gen, appends them with optimistic concurrency + causal metadata, and projects
+// inline into order_overview_v1.
 package main
 
 import (

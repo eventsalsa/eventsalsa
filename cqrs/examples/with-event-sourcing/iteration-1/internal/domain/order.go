@@ -1,5 +1,7 @@
 package domain
 
+import "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain/events"
+
 // OrderState is the write-side decision state reconstituted from stream history.
 type OrderState struct {
 	ID         string
@@ -17,11 +19,11 @@ func InitialOrder(id string) OrderState {
 // EvolveOrder applies a persisted domain fact onto OrderState without side effects.
 func EvolveOrder(s OrderState, ev any) OrderState {
 	switch e := ev.(type) {
-	case OrderPlaced:
+	case events.OrderPlaced:
 		s.CustomerID = e.CustomerID
 		s.TotalCents = e.TotalCents
 		s.Placed = true
-	case OrderConfirmed:
+	case events.OrderConfirmed:
 		s.Confirmed = true
 	}
 	return s
@@ -35,7 +37,7 @@ func Place(s OrderState, customerID string, totalCents int64) ([]any, error) {
 	if totalCents <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	return []any{OrderPlaced{CustomerID: customerID, TotalCents: totalCents}}, nil
+	return []any{events.OrderPlaced{CustomerID: customerID, TotalCents: totalCents}}, nil
 }
 
 // Confirm validates confirmation invariants against current state and emits OrderConfirmed.
@@ -46,5 +48,5 @@ func Confirm(s OrderState) ([]any, error) {
 	if s.Confirmed {
 		return nil, nil
 	}
-	return []any{OrderConfirmed{}}, nil
+	return []any{events.OrderConfirmed{}}, nil
 }

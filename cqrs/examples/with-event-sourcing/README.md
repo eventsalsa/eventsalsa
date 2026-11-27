@@ -4,7 +4,7 @@ An iterative series showing how `eventsalsa.dev/cqrs` combines with Event Sourci
 
 | Iteration | Storage Model | Architecture Highlights |
 | --- | --- | --- |
-| [`iteration-1`](./iteration-1/) | PostgreSQL event log (`eventsalsa/store`) + `order_overview_v1` | Exported Go `commands`/`queries` structs; pure `internal/domain` event-sourced state & rules tested with `cqrs/spectest`; `internal/application` handlers over an `OrderEventStore` port; `internal/infra` `pgx` tx middleware, store codec, inline projection, and SQL read handler. |
+| [`iteration-1`](./iteration-1/) | PostgreSQL event log (`eventsalsa/store`) + `order_overview_v1` | Exported Go `commands`/`queries` structs; pure `internal/domain` event-sourced state & rules tested with `cqrs/spectest`; `internal/application` handlers over `OrderEventStore`; `internal/infra` `pgx` tx middleware, `eventmap-gen` mappings, inline projection, and SQL read handler. |
 
 Notice how `iteration-1` echoes [`../without-event-sourcing/iteration-1/`](../without-event-sourcing/iteration-1/):
 - Top-level `commands/` and `queries/` packages are exported directly as plain Go structs.

@@ -5,7 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain/events"
 	"eventsalsa.dev/store"
 )
 
@@ -14,12 +14,12 @@ import (
 func projectInline(ctx context.Context, tx pgx.Tx, persisted []store.PersistedEvent) error {
 	for i := range persisted {
 		ev := &persisted[i]
-		domainEv, err := decodeDomainEvent(ev.EventType, ev.Payload)
+		domainEv, err := FromESEvent(*ev)
 		if err != nil {
 			return err
 		}
 		switch d := domainEv.(type) {
-		case domain.OrderPlaced:
+		case events.OrderPlaced:
 			_, execErr := tx.Exec(ctx, `
 				INSERT INTO order_overview_v1 (order_id, customer_id, status, total_cents, version)
 				VALUES ($1, $2, 'PLACED', $3, $4)
@@ -33,7 +33,7 @@ func projectInline(ctx context.Context, tx pgx.Tx, persisted []store.PersistedEv
 			if execErr != nil {
 				return execErr
 			}
-		case domain.OrderConfirmed:
+		case events.OrderConfirmed:
 			_, execErr := tx.Exec(ctx, `
 				UPDATE order_overview_v1
 				SET status = 'CONFIRMED', version = $2

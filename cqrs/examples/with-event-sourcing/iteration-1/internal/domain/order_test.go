@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain/events"
 	"eventsalsa.dev/cqrs/spectest"
 )
 
@@ -28,7 +29,7 @@ func TestOrderDomainSpecs(t *testing.T) {
 	spec := spectest.For(t, domain.InitialOrder, domain.EvolveOrder)
 
 	spec.When("ord-1", placeSpec{customerID: "cust-42", totalCents: 12900}, decidePlaceSpec).
-		Then(domain.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900}).
+		Then(events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900}).
 		ThenState(func(s domain.OrderState) {
 			if !s.Placed || s.TotalCents != 12900 {
 				t.Fatalf("unexpected state: %+v", s)
@@ -39,8 +40,8 @@ func TestOrderDomainSpecs(t *testing.T) {
 		ThenErrorIs(domain.ErrInvalidAmount)
 
 	spec.Given(
-		domain.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900},
-		domain.OrderConfirmed{},
+		events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900},
+		events.OrderConfirmed{},
 	).When("ord-1", confirmSpec{}, decideConfirmSpec).
 		ThenNoEvents()
 
