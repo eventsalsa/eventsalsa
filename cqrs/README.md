@@ -159,7 +159,7 @@ Runnable samples live in the standalone [`examples/`](./examples/) sub-module:
 - **[`examples/without-event-sourcing/iteration-1`](./examples/without-event-sourcing/iteration-1/)** — CQRS without Event Sourcing: exported Go `commands`/`queries` structs, domain invariants, and `internal/application` write handlers
 - **[`examples/without-event-sourcing/iteration-2`](./examples/without-event-sourcing/iteration-2/)** — CQRS without Event Sourcing: Protobuf `commands`/`queries` contracts, `command.Func` ACL adapters in `internal/infra/acl`, internal `internal/application` commands/handlers, and `internal/domain` entity invariants
 - **[`examples/without-event-sourcing/iteration-3`](./examples/without-event-sourcing/iteration-3/)** — CQRS without Event Sourcing: Protobuf contracts, ACL adapters, generic `Decider`/`StateRepository` handler in `internal/infra/persistence`, and a pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`
-- **[`examples/event-sourcing`](./examples/event-sourcing/)** — CQRS with Event Sourcing using `eventsalsa/store`, inline projection, and `cqrs/spectest` domain specs
+- **[`examples/with-event-sourcing/iteration-1`](./examples/with-event-sourcing/iteration-1/)** — CQRS with Event Sourcing using exported Go `commands`/`queries` structs, `internal/domain` event-sourced specs via `cqrs/spectest`, `internal/application` handlers over `OrderEventStore`, and `eventsalsa/store` + inline projection in `internal/infra`
 
 ## Package Layout
 

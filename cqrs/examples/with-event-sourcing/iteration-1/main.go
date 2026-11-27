@@ -1,9 +1,10 @@
 // Package main demonstrates CQRS combined with Event Sourcing over eventsalsa/store.
 //
-// Write commands execute inside a PostgreSQL transaction middleware, fold the
-// Order stream via pure initial/evolve/decide functions, append events to
-// eventsalsa.dev/store with optimistic concurrency + causal metadata, and update an
-// inline read-model table. Queries read directly from order_overview_v1.
+// Top-level commands/ and queries/ export plain Go contracts; internal/domain holds
+// pure InitialOrder/EvolveOrder/Place/Confirm rules; internal/application orchestrates
+// writes through OrderEventStore; and internal/infra executes commands inside a
+// PostgreSQL transaction middleware, appends events with optimistic concurrency and
+// causal metadata, and projects inline into order_overview_v1.
 package main
 
 import (
@@ -17,6 +18,11 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/command"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/commands"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/application"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/infra"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/queries"
 	"eventsalsa.dev/cqrs/query"
 	"eventsalsa.dev/store"
 	storepostgres "eventsalsa.dev/store/postgres"
@@ -32,10 +38,12 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 					return errors.Is(err, store.ErrOptimisticConcurrency)
 				},
 			}),
-			withPgxTx(pool),
+			infra.WithPgxTx(pool),
 		),
 		command.WithErrorClassifier(func(err error) error {
-			if errors.Is(err, errAlreadyPlaced) || errors.Is(err, errNotPlaced) || errors.Is(err, errInvalidAmount) {
+			if errors.Is(err, domain.ErrAlreadyPlaced) ||
+				errors.Is(err, domain.ErrNotPlaced) ||
+				errors.Is(err, domain.ErrInvalidAmount) {
 				return command.Reject(err)
 			}
 			return err
@@ -45,10 +53,11 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		return nil, err
 	}
 
-	if regErr := command.Register(bus, &PlaceOrderHandler{store: es}); regErr != nil {
+	orders := &infra.OrderEventStore{Store: es}
+	if regErr := command.Register(bus, &application.PlaceOrderHandler{Orders: orders}); regErr != nil {
 		return nil, regErr
 	}
-	if regErr := command.Register(bus, &ConfirmOrderHandler{store: es}); regErr != nil {
+	if regErr := command.Register(bus, &application.ConfirmOrderHandler{Orders: orders}); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil
@@ -59,7 +68,7 @@ func newQueryBus(pool *pgxpool.Pool) (*query.Bus, error) {
 	if err != nil {
 		return nil, err
 	}
-	if regErr := query.Register(qBus, &GetOrderOverviewHandler{db: pool}); regErr != nil {
+	if regErr := query.Register(qBus, &infra.GetOrderOverviewHandler{DB: pool}); regErr != nil {
 		return nil, regErr
 	}
 	return qBus, nil
@@ -69,7 +78,7 @@ func run(ctx context.Context) error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		// #nosec G101 -- local development example default DSN
-		dsn = "postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=disable" //nolint:gosec // G101: default local DSN
+		dsn = "postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=disable" //nolint:gosec // local DSN
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -78,7 +87,7 @@ func run(ctx context.Context) error {
 	}
 	defer pool.Close()
 
-	if schemaErr := ensureSchema(ctx, pool); schemaErr != nil {
+	if schemaErr := infra.EnsureSchema(ctx, pool); schemaErr != nil {
 		return schemaErr
 	}
 
@@ -95,18 +104,18 @@ func run(ctx context.Context) error {
 	orderID := "ord-" + uuid.NewString()[:8]
 	reqCtx := cqrs.WithTraceID(ctx, "trace-"+uuid.NewString()[:8])
 
-	if dispatchErr := cmdBus.Dispatch(reqCtx, PlaceOrder{
+	if dispatchErr := cmdBus.Dispatch(reqCtx, commands.PlaceOrder{
 		OrderID:    orderID,
 		CustomerID: "cust-42",
 		TotalCents: 12900,
 	}); dispatchErr != nil {
 		return dispatchErr
 	}
-	if dispatchErr := cmdBus.Dispatch(reqCtx, ConfirmOrder{OrderID: orderID}); dispatchErr != nil {
+	if dispatchErr := cmdBus.Dispatch(reqCtx, commands.ConfirmOrder{OrderID: orderID}); dispatchErr != nil {
 		return dispatchErr
 	}
 
-	view, err := query.Execute[OrderOverview](reqCtx, qBus, GetOrderOverview{OrderID: orderID})
+	view, err := query.Execute[queries.OrderOverview](reqCtx, qBus, queries.GetOrderOverview{OrderID: orderID})
 	if err != nil {
 		return err
 	}
