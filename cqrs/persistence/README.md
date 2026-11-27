@@ -2,7 +2,7 @@
 
 Database-agnostic `Decider`, `StateRepository`, `EventRepository`, `Adapter`, and generic `NewCommandHandler` wiring for `eventsalsa.dev/cqrs`.
 
-Depends strictly on `eventsalsa.dev/cqrs` and Go's standard library (zero database or driver imports). PostgreSQL-specific `eventsalsa/store`, `eventsalsa/snapshot`, and `pgx` adapters will follow in `eventsalsa.dev/cqrs/persistence/postgres`.
+Depends strictly on `eventsalsa.dev/cqrs` and Go's standard library (zero database or driver imports). PostgreSQL-native `pgx/v5` transaction scoping and `eventsalsa/store` `EventRepository` wiring live in [`eventsalsa.dev/cqrs/persistence/postgres`](./postgres/).
 
 ## Usage
 

@@ -115,7 +115,7 @@ jobs:
           build-mode: manual
 
       - name: Build all modules
-        run: go build ./store/... ./snapshot/... ./projector/... ./encryption/... ./encryption/kek/awskms/... ./encryption/kek/gcpkms/... ./cqrs/... ./cqrs/persistence/...
+        run: go build ./store/... ./snapshot/... ./projector/... ./encryption/... ./encryption/kek/awskms/... ./encryption/kek/gcpkms/... ./cqrs/... ./cqrs/persistence/... ./cqrs/persistence/postgres/...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4

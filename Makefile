@@ -1,6 +1,6 @@
-GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/persistence cqrs/examples
+GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/persistence cqrs/persistence/postgres cqrs/examples
 SECURITY_MODULES := $(filter-out encryption/examples cqrs/examples,$(GO_MODULES))
-INTEGRATION_MODULES := store snapshot projector encryption cqrs
+INTEGRATION_MODULES := store snapshot projector encryption cqrs cqrs/persistence/postgres
 
 .PHONY: help check fmt fmt-check vet lint build test test-unit test-integration gosec vuln docs-build \
 	check-store check-snapshot check-projector check-encryption check-cqrs
@@ -73,6 +73,8 @@ gosec: ## Run gosec across all published Go modules
 			extra="-exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples"; \
 		elif [ "$$mod" = "cqrs" ]; then \
 			extra="-exclude-dir=examples -exclude-dir=persistence"; \
+		elif [ "$$mod" = "cqrs/persistence" ]; then \
+			extra="-exclude-dir=postgres"; \
 		fi; \
 		(cd "$$mod" && gosec $$extra -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \

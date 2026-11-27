@@ -73,6 +73,9 @@ jobs:
               - '!cqrs/examples/**'
             cqrs_persistence:
               - 'cqrs/persistence/**'
+              - '!cqrs/persistence/postgres/**'
+            cqrs_persistence_postgres:
+              - 'cqrs/persistence/postgres/**'
             cqrs_examples:
               - 'cqrs/examples/**'
             docs:
@@ -95,6 +98,7 @@ jobs:
           EXAMPLES_CHANGED: ${{ steps.filter.outputs.encryption_examples }}
           CQRS_CHANGED: ${{ steps.filter.outputs.cqrs }}
           CQRS_PERSISTENCE_CHANGED: ${{ steps.filter.outputs.cqrs_persistence }}
+          CQRS_PERSISTENCE_POSTGRES_CHANGED: ${{ steps.filter.outputs.cqrs_persistence_postgres }}
           CQRS_EXAMPLES_CHANGED: ${{ steps.filter.outputs.cqrs_examples }}
         run: |
           all_modules='[
@@ -106,7 +110,8 @@ jobs:
             {"key":"encryption_gcpkms","dir":"encryption/kek/gcpkms","integration":false,"published":true,"gosec_name":"encryption-kek-gcpkms","gosec_args":""},
             {"key":"encryption_examples","dir":"encryption/examples","integration":false,"published":false,"gosec_name":"encryption-examples","gosec_args":""},
             {"key":"cqrs","dir":"cqrs","integration":true,"published":true,"gosec_name":"cqrs","gosec_args":"-exclude-dir=examples -exclude-dir=persistence"},
-            {"key":"cqrs_persistence","dir":"cqrs/persistence","integration":false,"published":true,"gosec_name":"cqrs-persistence","gosec_args":""},
+            {"key":"cqrs_persistence","dir":"cqrs/persistence","integration":false,"published":true,"gosec_name":"cqrs-persistence","gosec_args":"-exclude-dir=postgres"},
+            {"key":"cqrs_persistence_postgres","dir":"cqrs/persistence/postgres","integration":true,"published":true,"gosec_name":"cqrs-persistence-postgres","gosec_args":""},
             {"key":"cqrs_examples","dir":"cqrs/examples","integration":false,"published":false,"gosec_name":"cqrs-examples","gosec_args":""}
           ]'
           root_changed="false"
@@ -124,6 +129,7 @@ jobs:
               --arg encryption_examples "$EXAMPLES_CHANGED" \
               --arg cqrs "$CQRS_CHANGED" \
               --arg cqrs_persistence "$CQRS_PERSISTENCE_CHANGED" \
+              --arg cqrs_persistence_postgres "$CQRS_PERSISTENCE_POSTGRES_CHANGED" \
               --arg cqrs_examples "$CQRS_EXAMPLES_CHANGED" '
                 [ .[] | select(
                   (.key == "store" and $store == "true") or
@@ -135,7 +141,8 @@ jobs:
                   (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true")) or
                   (.key == "cqrs" and $cqrs == "true") or
                   (.key == "cqrs_persistence" and ($cqrs_persistence == "true" or $cqrs == "true")) or
-                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true"))
+                  (.key == "cqrs_persistence_postgres" and ($cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true")) or
+                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true"))
                 ) ]')
           fi
           if [ "$TARGET" = "security" ]; then
