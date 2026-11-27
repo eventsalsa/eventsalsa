@@ -13,10 +13,15 @@ func TestSimpleCQRSExample(t *testing.T) {
 	t.Parallel()
 
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
-	db := newRelationalDB()
-	cmdBus, qBus, err := buildBuses(db, slog.New(slog.DiscardHandler))
+	db := newAppDB()
+
+	cmdBus, err := newCommandBus(db, slog.New(slog.DiscardHandler))
 	if err != nil {
-		t.Fatalf("buildBuses: %v", err)
+		t.Fatalf("newCommandBus: %v", err)
+	}
+	qBus, err := newQueryBus(db)
+	if err != nil {
+		t.Fatalf("newQueryBus: %v", err)
 	}
 
 	if err := cmdBus.Dispatch(ctx, PlaceOrder{

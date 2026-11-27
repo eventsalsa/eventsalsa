@@ -1,6 +1,5 @@
-// Package main demonstrates Simple CQRS without Event Sourcing:
-// write-side commands enforce invariants on authoritative state while
-// read-side queries return presentation-shaped DTOs directly.
+// Package main demonstrates CQRS without Event Sourcing:
+// flat struct handlers for write commands and lightweight queries wired onto buses.
 package main
 
 import (
@@ -9,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"eventsalsa.dev/cqrs"
@@ -18,114 +15,8 @@ import (
 	"eventsalsa.dev/cqrs/query"
 )
 
-const (
-	statusPending  = "PENDING"
-	statusCanceled = "CANCELED"
-)
-
-var (
-	errOrderNotFound     = errors.New("order not found")
-	errAlreadyCanceled   = errors.New("order already canceled")
-	errInvalidOrderTotal = errors.New("order total must be positive")
-	errTransientWrite    = errors.New("transient database write conflict")
-)
-
-// PlaceOrder advances write-side state by registering a new order.
-type PlaceOrder struct {
-	OrderID    string
-	CustomerID string
-	TotalCents int64
-}
-
-// CancelOrder advances write-side state by canceling an existing order.
-type CancelOrder struct {
-	OrderID string
-	Reason  string
-}
-
-// GetOrderSummary fetches a display DTO for screens or API responses.
-type GetOrderSummary struct {
-	OrderID string
-}
-
-// OrderSummary is a presentation read model shaped specifically for callers.
-type OrderSummary struct {
-	OrderID      string
-	CustomerName string
-	Status       string
-	DisplayTotal string
-}
-
-type orderRecord struct {
-	ID         string
-	CustomerID string
-	Status     string
-	TotalCents int64
-}
-
-// relationalDB simulates a single shared PostgreSQL database holding normalized
-// write tables alongside denormalized/joined customer display lookup data.
-type relationalDB struct {
-	orders       map[string]orderRecord
-	customers    map[string]string
-	mu           sync.RWMutex
-	failFirstPut atomic.Bool
-}
-
-func newRelationalDB() *relationalDB {
-	db := &relationalDB{
-		orders:    make(map[string]orderRecord),
-		customers: map[string]string{"cust-42": "Ada Lovelace"},
-	}
-	db.failFirstPut.Store(true)
-	return db
-}
-
-func (db *relationalDB) insertOrder(rec orderRecord) error {
-	// Simulate one transient write conflict so command.RetryMiddleware exercises cleanly.
-	if db.failFirstPut.CompareAndSwap(true, false) {
-		return errTransientWrite
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.orders[rec.ID] = rec
-	return nil
-}
-
-func (db *relationalDB) cancelOrder(orderID string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	rec, ok := db.orders[orderID]
-	if !ok {
-		return errOrderNotFound
-	}
-	if rec.Status == statusCanceled {
-		return errAlreadyCanceled
-	}
-	rec.Status = statusCanceled
-	db.orders[orderID] = rec
-	return nil
-}
-
-// selectOrderSummary mirrors a thin SQL JOIN tuned solely for presentation reads.
-func (db *relationalDB) selectOrderSummary(orderID string) (OrderSummary, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	rec, ok := db.orders[orderID]
-	if !ok {
-		return OrderSummary{}, errOrderNotFound
-	}
-	customerName := db.customers[rec.CustomerID]
-	return OrderSummary{
-		OrderID:      rec.ID,
-		CustomerName: customerName,
-		Status:       rec.Status,
-		DisplayTotal: fmt.Sprintf("$%.2f", float64(rec.TotalCents)/100),
-	}, nil
-}
-
-func buildBuses(db *relationalDB, logger *slog.Logger) (cmdBus *command.Bus, qBus *query.Bus, err error) {
-	cmdBus, err = command.NewBus(
+func newCommandBus(db *appDB, logger *slog.Logger) (*command.Bus, error) {
+	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
@@ -152,55 +43,38 @@ func buildBuses(db *relationalDB, logger *slog.Logger) (cmdBus *command.Bus, qBu
 		}),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if regErr := command.Register(cmdBus, command.Func[PlaceOrder](func(ctx context.Context, cmd PlaceOrder) error {
-		if cmd.TotalCents <= 0 {
-			return errInvalidOrderTotal
-		}
-		logger.InfoContext(ctx, "placing order",
-			"order_id", cmd.OrderID,
-			"trace_id", cqrs.TraceIDFromContext(ctx),
-			"command_id", cqrs.CommandIDFromContext(ctx),
-		)
-		return db.insertOrder(orderRecord{
-			ID:         cmd.OrderID,
-			CustomerID: cmd.CustomerID,
-			Status:     statusPending,
-			TotalCents: cmd.TotalCents,
-		})
-	})); regErr != nil {
-		return nil, nil, regErr
+	if regErr := command.Register(bus, &PlaceOrderHandler{db: db, logger: logger}); regErr != nil {
+		return nil, regErr
 	}
-
-	if regErr := command.Register(cmdBus, command.Func[CancelOrder](func(_ context.Context, cmd CancelOrder) error {
-		return db.cancelOrder(cmd.OrderID)
-	})); regErr != nil {
-		return nil, nil, regErr
+	if regErr := command.Register(bus, &CancelOrderHandler{db: db}); regErr != nil {
+		return nil, regErr
 	}
+	return bus, nil
+}
 
-	qBus, err = query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
+func newQueryBus(db *appDB) (*query.Bus, error) {
+	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	if regErr := query.Register(qBus, query.Func[GetOrderSummary, OrderSummary](
-		func(_ context.Context, q GetOrderSummary) (OrderSummary, error) {
-			return db.selectOrderSummary(q.OrderID)
-		},
-	)); regErr != nil {
-		return nil, nil, regErr
+	if regErr := query.Register(qBus, &GetOrderSummaryHandler{db: db}); regErr != nil {
+		return nil, regErr
 	}
-
-	return cmdBus, qBus, nil
+	return qBus, nil
 }
 
 func run(ctx context.Context) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	db := newRelationalDB()
+	db := newAppDB()
 
-	cmdBus, qBus, err := buildBuses(db, logger)
+	cmdBus, err := newCommandBus(db, logger)
+	if err != nil {
+		return err
+	}
+	qBus, err := newQueryBus(db)
 	if err != nil {
 		return err
 	}
