@@ -3,7 +3,6 @@ package queries
 import (
 	"context"
 
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/infra/persistence"
 	pbqueries "eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/queries"
 )
@@ -20,7 +19,7 @@ func (h *GetOrderSummaryHandler) Handle(
 	q *pbqueries.GetOrderSummary,
 ) (*pbqueries.OrderSummary, error) {
 	if q == nil {
-		return nil, domain.ErrEmptyQuery
+		return nil, ErrEmptyQuery
 	}
 	return h.DB.SelectOrderSummary(q.GetOrderId())
 }

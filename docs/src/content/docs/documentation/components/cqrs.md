@@ -401,7 +401,7 @@ Dedicated `cqrs/persistence` helpers will arrive in a follow-up module. Meanwhil
 | Example | Storage Model | Architecture Highlights |
 | --- | --- | --- |
 | [`without-event-sourcing/style-1`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/style-1) | Single in-memory DB | Direct exported Go `commands`/`queries` structs; `internal/domain` invariants; `internal/application` write handlers; `internal/infra` persistence and read handlers. |
-| [`without-event-sourcing/style-2`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/style-2) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; `command.Func` ACL adapters in `internal/infra/acl`; thin `internal/application` orchestration delegating to pure `internal/domain` command handlers. |
+| [`without-event-sourcing/style-2`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/style-2) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; `command.Func` ACL adapters in `internal/infra/acl` mapping to `internal/application` use-case commands; `internal/domain` entity invariants. |
 | [`event-sourcing`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/event-sourcing) | Event log + projection | Append-only events via `eventsalsa/store` paired with a projected read view. |
 
 <!-- TODO(cqrs/persistence): Hidden until cqrs/persistence introduces initial/evolve/decide.

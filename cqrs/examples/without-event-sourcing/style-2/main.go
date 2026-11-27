@@ -1,6 +1,7 @@
-// Package main wires Style 2: top-level Protobuf commands and queries, private domain
-// commands inside internal/domain, write handlers inside internal/application, command.Func
-// ACL translators inside internal/infra/acl, and DB/query handlers inside internal/infra.
+// Package main wires Style 2: top-level Protobuf commands and queries, command.Func
+// ACL translators inside internal/infra/acl, internal use-case commands and handlers
+// inside internal/application, domain entity/invariants inside internal/domain, and
+// persistence/read query handlers inside internal/infra.
 package main
 
 import (
@@ -39,7 +40,7 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 			if errors.Is(err, domain.ErrAlreadyCanceled) ||
 				errors.Is(err, domain.ErrInvalidOrderTotal) ||
 				errors.Is(err, domain.ErrCancellationReasonRequired) ||
-				errors.Is(err, domain.ErrEmptyCommand) {
+				errors.Is(err, acl.ErrEmptyCommand) {
 				return command.Reject(err)
 			}
 			return err

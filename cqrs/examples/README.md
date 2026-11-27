@@ -5,7 +5,7 @@ Runnable examples illustrating how `eventsalsa.dev/cqrs` adapts to different arc
 | Example | Pattern | Contracts | Description |
 | --- | --- | --- | --- |
 | [`without-event-sourcing/style-1`](./without-event-sourcing/style-1/) | Without Event Sourcing | Exported Go structs (`commands/`, `queries/`) | Direct `internal/application` write handlers, `internal/domain` invariants, and thin `internal/infra` read handlers. Zero external dependencies. |
-| [`without-event-sourcing/style-2`](./without-event-sourcing/style-2/) | Without Event Sourcing | Compiled Protobuf (`commands/`, `queries/`) | `command.Func` ACL adapters in `internal/infra/acl`, thin `internal/application` orchestration, pure `internal/domain` command handlers, and Protobuf read views. |
+| [`without-event-sourcing/style-2`](./without-event-sourcing/style-2/) | Without Event Sourcing | Compiled Protobuf (`commands/`, `queries/`) | `command.Func` ACL adapters in `internal/infra/acl`, internal `internal/application` commands & handlers, `internal/domain` entity invariants, and Protobuf read views. |
 | [`event-sourcing`](./event-sourcing/) | With `eventsalsa/store` Event Sourcing | Go structs | Append-only event persistence on PostgreSQL paired with inline read projections and `cqrs/spectest` specs. |
 
 ## Running the Examples

@@ -86,18 +86,18 @@ func TestStyle2ACLNilSafety(t *testing.T) {
 	placeACL := acl.NewPlaceOrderACL(&application.PlaceOrderHandler{
 		Orders: db,
 	})
-	if err := placeACL.Handle(ctx, nil); !errors.Is(err, domain.ErrEmptyCommand) {
-		t.Fatalf("placeACL(nil) err = %v, want %v", err, domain.ErrEmptyCommand)
+	if err := placeACL.Handle(ctx, nil); !errors.Is(err, acl.ErrEmptyCommand) {
+		t.Fatalf("placeACL(nil) err = %v, want %v", err, acl.ErrEmptyCommand)
 	}
 
 	cancelACL := acl.NewCancelOrderACL(&application.CancelOrderHandler{Orders: db})
-	if err := cancelACL.Handle(ctx, nil); !errors.Is(err, domain.ErrEmptyCommand) {
-		t.Fatalf("cancelACL(nil) err = %v, want %v", err, domain.ErrEmptyCommand)
+	if err := cancelACL.Handle(ctx, nil); !errors.Is(err, acl.ErrEmptyCommand) {
+		t.Fatalf("cancelACL(nil) err = %v, want %v", err, acl.ErrEmptyCommand)
 	}
 
 	qHandler := &infraqueries.GetOrderSummaryHandler{DB: db}
-	if _, err := qHandler.Handle(ctx, nil); !errors.Is(err, domain.ErrEmptyQuery) {
-		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, domain.ErrEmptyQuery)
+	if _, err := qHandler.Handle(ctx, nil); !errors.Is(err, infraqueries.ErrEmptyQuery) {
+		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
 	}
 
 	qBus, err := newQueryBus(db)

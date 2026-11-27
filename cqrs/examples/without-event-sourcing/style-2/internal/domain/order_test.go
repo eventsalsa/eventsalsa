@@ -7,65 +7,45 @@ import (
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/domain"
 )
 
-func TestHandlePlaceOrder(t *testing.T) {
+func TestNewOrder(t *testing.T) {
 	t.Parallel()
 
-	order, err := domain.HandlePlaceOrder(domain.PlaceOrder{
-		OrderID:    "ord-1",
-		CustomerID: "cust-42",
-		TotalCents: 2500,
-	})
+	order, err := domain.NewOrder("ord-1", "cust-42", 2500)
 	if err != nil {
-		t.Fatalf("HandlePlaceOrder unexpected error: %v", err)
+		t.Fatalf("NewOrder unexpected error: %v", err)
 	}
 	if order.Status != domain.StatusPending || order.TotalCents != 2500 {
 		t.Fatalf("unexpected order: %+v", order)
 	}
 
-	if _, invalidErr := domain.HandlePlaceOrder(domain.PlaceOrder{
-		OrderID:    "ord-2",
-		CustomerID: "cust-42",
-		TotalCents: 0,
-	}); !errors.Is(invalidErr, domain.ErrInvalidOrderTotal) {
+	if _, invalidErr := domain.NewOrder("ord-2", "cust-42", 0); !errors.Is(invalidErr, domain.ErrInvalidOrderTotal) {
 		t.Fatalf("zero total err = %v, want %v", invalidErr, domain.ErrInvalidOrderTotal)
 	}
 }
 
-func TestHandleCancelOrder(t *testing.T) {
+func TestOrderCancel(t *testing.T) {
 	t.Parallel()
 
-	initial := domain.Order{
-		ID:         "ord-1",
-		CustomerID: "cust-42",
-		Status:     domain.StatusPending,
-		TotalCents: 2500,
+	order, err := domain.NewOrder("ord-1", "cust-42", 2500)
+	if err != nil {
+		t.Fatalf("NewOrder unexpected error: %v", err)
 	}
 
-	if _, blankErr := domain.HandleCancelOrder(initial, domain.CancelOrder{
-		OrderID: "ord-1",
-		Reason:  "   ",
-	}); !errors.Is(blankErr, domain.ErrCancellationReasonRequired) {
+	if blankErr := order.Cancel("   "); !errors.Is(blankErr, domain.ErrCancellationReasonRequired) {
 		t.Fatalf("blank reason err = %v, want %v", blankErr, domain.ErrCancellationReasonRequired)
 	}
+	if order.Status != domain.StatusPending {
+		t.Fatalf("status mutated on rejected cancel: %q", order.Status)
+	}
 
-	canceled, err := domain.HandleCancelOrder(initial, domain.CancelOrder{
-		OrderID: "ord-1",
-		Reason:  "customer request",
-	})
-	if err != nil {
-		t.Fatalf("HandleCancelOrder unexpected error: %v", err)
+	if cancelErr := order.Cancel("customer request"); cancelErr != nil {
+		t.Fatalf("Cancel unexpected error: %v", cancelErr)
 	}
-	if canceled.Status != domain.StatusCanceled || canceled.CancelReason != "customer request" {
-		t.Fatalf("unexpected canceled order: %+v", canceled)
+	if order.Status != domain.StatusCanceled || order.CancelReason != "customer request" {
+		t.Fatalf("unexpected canceled order: %+v", order)
 	}
-	// Verify caller's value wasn't mutated and repeat cancellation is rejected.
-	if initial.Status != domain.StatusPending {
-		t.Fatalf("initial order mutated: %+v", initial)
-	}
-	if _, dupErr := domain.HandleCancelOrder(canceled, domain.CancelOrder{
-		OrderID: "ord-1",
-		Reason:  "duplicate",
-	}); !errors.Is(dupErr, domain.ErrAlreadyCanceled) {
+
+	if dupErr := order.Cancel("duplicate"); !errors.Is(dupErr, domain.ErrAlreadyCanceled) {
 		t.Fatalf("duplicate cancel err = %v, want %v", dupErr, domain.ErrAlreadyCanceled)
 	}
 }
