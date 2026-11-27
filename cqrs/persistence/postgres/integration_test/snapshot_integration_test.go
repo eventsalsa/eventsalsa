@@ -479,6 +479,9 @@ func TestTxSnapshotAdapter_PostgresWideAtomicityAndConcurrentOCC(t *testing.T) {
 		}
 	}
 
+	// Under PostgreSQL READ COMMITTED concurrent retries, an intervening commit between snapshot.Get
+	// and store.ReadStream can trigger EveryNEvents(2) at version 7 or 8; verify invariant bounds
+	// (7 <= snapVer <= 8) AND full state reconstitution via snapshot + delta replay.
 	var snapVer int64
 	if err := pool.QueryRow(ctx, `
 		SELECT stream_version FROM snapshots
@@ -486,9 +489,39 @@ func TestTxSnapshotAdapter_PostgresWideAtomicityAndConcurrentOCC(t *testing.T) {
 	`, id).Scan(&snapVer); err != nil {
 		t.Fatalf("query snapshots: %v", err)
 	}
-	if snapVer != 8 {
-		t.Fatalf("wide snapshot stream_version = %d, want 8", snapVer)
+	if snapVer < 7 || snapVer > 8 {
+		t.Fatalf("wide snapshot stream_version = %d, want 7 or 8", snapVer)
 	}
+
+	verifyRepo, err := snapshot.NewRepository(es, snapStore, snapshot.RepositoryConfig[versionedAccount]{
+		StreamType:    "WideSnap",
+		SchemaVersion: 1,
+		Initializer:   versionedDecider().Initial,
+		Apply: func(st versionedAccount, pe store.PersistedEvent) (versionedAccount, error) {
+			ev, decErr := codec.Decode(ctx, pe)
+			if decErr != nil {
+				return versionedAccount{}, decErr
+			}
+			return versionedDecider().Evolve(st, ev), nil
+		},
+		Codec: snapshot.JSON[versionedAccount](),
+	})
+	if err != nil {
+		t.Fatalf("verifyRepo: %v", err)
+	}
+	var loadRes snapshot.Result[versionedAccount]
+	if loadErr := postgres.InReadTx(ctx, pool, func(txCtx context.Context, tx pgx.Tx) error {
+		var rErr error
+		loadRes, rErr = verifyRepo.Load(txCtx, tx, id)
+		return rErr
+	}); loadErr != nil {
+		t.Fatalf("verifyRepo.Load: %v", loadErr)
+	}
+	if !loadRes.SnapshotHit || loadRes.SnapshotVersion != snapVer ||
+		loadRes.StreamVersion != 8 || loadRes.State.Balance != 80 || loadRes.State.Version != 8 {
+		t.Fatalf("unexpected concurrent wide loadRes: %+v (snapVer=%d)", loadRes, snapVer)
+	}
+
 	var projBal int
 	if err := pool.QueryRow(ctx, `SELECT balance FROM order_overview_v1 WHERE order_id = $1`, id).Scan(&projBal); err != nil {
 		t.Fatal(err)

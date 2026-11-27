@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package orders.es.v4.commands.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/commands;commands";
+
+// AddOrderItem adds line items to an existing placed order before confirmation.
+message AddOrderItem {
+  string order_id = 1;
+  string sku = 2;
+  int64 unit_cents = 3;
+  int64 quantity = 4;
+}
