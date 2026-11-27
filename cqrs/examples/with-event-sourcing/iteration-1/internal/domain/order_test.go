@@ -27,6 +27,21 @@ func TestPlaceOrder(t *testing.T) {
 		t.Fatalf("UncommittedEvents() = %#v, want %#v", order.UncommittedEvents(), wantEvents)
 	}
 
+	order.MarkCommitted(1)
+	if order.Version() != 1 {
+		t.Fatalf("Version() after MarkCommitted = %d, want 1", order.Version())
+	}
+	if len(order.UncommittedEvents()) != 0 {
+		t.Fatalf("UncommittedEvents() after MarkCommitted = %#v, want empty", order.UncommittedEvents())
+	}
+	if confirmErr := order.Confirm(); confirmErr != nil {
+		t.Fatalf("Confirm after MarkCommitted unexpected error: %v", confirmErr)
+	}
+	wantConfirmed := []any{events.OrderConfirmed{}}
+	if !reflect.DeepEqual(order.UncommittedEvents(), wantConfirmed) {
+		t.Fatalf("UncommittedEvents() = %#v, want %#v", order.UncommittedEvents(), wantConfirmed)
+	}
+
 	if _, invalidErr := domain.PlaceOrder("ord-2", "cust-42", 0); !errors.Is(invalidErr, domain.ErrInvalidAmount) {
 		t.Fatalf("zero total err = %v, want %v", invalidErr, domain.ErrInvalidAmount)
 	}

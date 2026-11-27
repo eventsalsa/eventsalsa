@@ -74,6 +74,12 @@ func (o *Order) UncommittedEvents() []any {
 	return slices.Clone(o.uncommitted)
 }
 
+// MarkCommitted clears uncommitted events and updates the stream version after persistence succeeds.
+func (o *Order) MarkCommitted(version int64) {
+	o.version = version
+	o.uncommitted = nil
+}
+
 func (o *Order) record(ev any) {
 	o.Evolve(ev)
 	o.uncommitted = append(o.uncommitted, ev)

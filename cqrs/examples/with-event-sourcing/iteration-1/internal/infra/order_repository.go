@@ -72,10 +72,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		return err
 	}
 
-	expected := store.NoStream()
-	if version := order.Version(); version > 0 {
-		expected = store.Exact(version)
-	}
+	expected := store.Exact(order.Version())
 	res, err := r.Store.Append(ctx, tx, expected, toAppend)
 	if err != nil {
 		if order.Version() == 0 && errors.Is(err, store.ErrOptimisticConcurrency) {
@@ -90,5 +87,6 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 			}
 		}
 	}
+	order.MarkCommitted(res.ToVersion())
 	return nil
 }
