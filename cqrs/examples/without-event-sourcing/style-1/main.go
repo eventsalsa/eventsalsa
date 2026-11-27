@@ -1,5 +1,6 @@
-// Package main demonstrates CQRS without Event Sourcing:
-// flat struct handlers for write commands and lightweight queries wired onto buses.
+// Package main wires Style 1: top-level Go commands and queries, domain invariants
+// inside internal/domain, write handlers inside internal/application, and DB/query
+// handlers inside internal/infra.
 package main
 
 import (
@@ -12,10 +13,15 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/command"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-1/commands"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-1/internal/application"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-1/internal/domain"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-1/internal/infra"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-1/queries"
 	"eventsalsa.dev/cqrs/query"
 )
 
-func newCommandBus(db *appDB, logger *slog.Logger) (*command.Bus, error) {
+func newCommandBus(db *infra.MemoryDB, logger *slog.Logger) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -24,12 +30,12 @@ func newCommandBus(db *appDB, logger *slog.Logger) (*command.Bus, error) {
 				BaseBackoff: 5 * time.Millisecond,
 				MaxBackoff:  25 * time.Millisecond,
 				RetryIf: func(err error) bool {
-					return errors.Is(err, errTransientWrite)
+					return errors.Is(err, infra.ErrTransientWrite)
 				},
 			}),
 		),
 		command.WithErrorClassifier(func(err error) error {
-			if errors.Is(err, errAlreadyCanceled) || errors.Is(err, errInvalidOrderTotal) {
+			if errors.Is(err, domain.ErrAlreadyCanceled) || errors.Is(err, domain.ErrInvalidOrderTotal) {
 				return command.Reject(err)
 			}
 			return err
@@ -46,21 +52,26 @@ func newCommandBus(db *appDB, logger *slog.Logger) (*command.Bus, error) {
 		return nil, err
 	}
 
-	if regErr := command.Register(bus, &PlaceOrderHandler{db: db, logger: logger}); regErr != nil {
+	if regErr := command.Register(bus, &application.PlaceOrderHandler{
+		Orders: db,
+		Logger: logger,
+	}); regErr != nil {
 		return nil, regErr
 	}
-	if regErr := command.Register(bus, &CancelOrderHandler{db: db}); regErr != nil {
+	if regErr := command.Register(bus, &application.CancelOrderHandler{
+		Orders: db,
+	}); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil
 }
 
-func newQueryBus(db *appDB) (*query.Bus, error) {
+func newQueryBus(db *infra.MemoryDB) (*query.Bus, error) {
 	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
 		return nil, err
 	}
-	if regErr := query.Register(qBus, &GetOrderSummaryHandler{db: db}); regErr != nil {
+	if regErr := query.Register(qBus, &infra.GetOrderSummaryHandler{DB: db}); regErr != nil {
 		return nil, regErr
 	}
 	return qBus, nil
@@ -68,7 +79,7 @@ func newQueryBus(db *appDB) (*query.Bus, error) {
 
 func run(ctx context.Context) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	db := newAppDB()
+	db := infra.NewMemoryDB()
 
 	cmdBus, err := newCommandBus(db, logger)
 	if err != nil {
@@ -79,9 +90,9 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	reqCtx := cqrs.WithTraceID(ctx, "req-demo-1")
+	reqCtx := cqrs.WithTraceID(ctx, "req-style1-1")
 
-	if dispatchErr := cmdBus.Dispatch(reqCtx, PlaceOrder{
+	if dispatchErr := cmdBus.Dispatch(reqCtx, commands.PlaceOrder{
 		OrderID:    "ord-100",
 		CustomerID: "cust-42",
 		TotalCents: 14900,
@@ -89,21 +100,27 @@ func run(ctx context.Context) error {
 		return dispatchErr
 	}
 
-	summary, err := query.Execute[OrderSummary](reqCtx, qBus, GetOrderSummary{OrderID: "ord-100"})
+	summary, err := query.Execute[queries.OrderSummary](reqCtx, qBus, queries.GetOrderSummary{OrderID: "ord-100"})
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Read DTO after PlaceOrder:  %+v\n", summary)
 
 	// Cancel once succeeds; canceling again is masked as a domain rejection via WithOnRejected.
-	if dispatchErr := cmdBus.Dispatch(reqCtx, CancelOrder{OrderID: "ord-100", Reason: "customer request"}); dispatchErr != nil {
+	if dispatchErr := cmdBus.Dispatch(reqCtx, commands.CancelOrder{
+		OrderID: "ord-100",
+		Reason:  "customer request",
+	}); dispatchErr != nil {
 		return dispatchErr
 	}
-	if dispatchErr := cmdBus.Dispatch(reqCtx, CancelOrder{OrderID: "ord-100", Reason: "duplicate click"}); dispatchErr != nil {
+	if dispatchErr := cmdBus.Dispatch(reqCtx, commands.CancelOrder{
+		OrderID: "ord-100",
+		Reason:  "duplicate click",
+	}); dispatchErr != nil {
 		return dispatchErr
 	}
 
-	summary, err = query.Execute[OrderSummary](reqCtx, qBus, GetOrderSummary{OrderID: "ord-100"})
+	summary, err = query.Execute[queries.OrderSummary](reqCtx, qBus, queries.GetOrderSummary{OrderID: "ord-100"})
 	if err != nil {
 		return err
 	}

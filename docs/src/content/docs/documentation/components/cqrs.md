@@ -396,10 +396,13 @@ In an event-sourced service, `eventsalsa/cqrs` sits at the application boundary 
 3. **Projection into read models**: Committed events update query-friendly tables either **inline inside the write transaction** (for immediate read-after-write consistency) or **asynchronously** via [`eventsalsa/projector`](../projector/) (for independent scaling and isolation).
 4. **Query execution (`cqrs/query`)**: Read endpoints run lightweight queries via `query.Execute` directly against those projected tables without replaying event streams or invoking write logic.
 
-Dedicated `cqrs/persistence` helpers will arrive in a follow-up module. Meanwhile, you can inspect full working code for both patterns in [`cqrs/examples`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples):
+Dedicated `cqrs/persistence` helpers will arrive in a follow-up module. Meanwhile, you can inspect complete runnable programs in [`cqrs/examples`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples):
 
-- **CQRS without Event Sourcing:** [`cqrs/examples/simple`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/simple)
-- **CQRS with `eventsalsa/store` Event Sourcing:** [`cqrs/examples/event-sourcing`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/event-sourcing)
+| Example | Storage Model | Architecture Highlights |
+| --- | --- | --- |
+| [`without-event-sourcing/style-1`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/style-1) | Single in-memory DB | Direct exported Go `commands`/`queries` structs; `internal/domain` invariants; `internal/application` write handlers; `internal/infra` persistence and read handlers. |
+| [`without-event-sourcing/style-2`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/style-2) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; private `internal/domain` commands; `command.Func` ACL adapters in `internal/infra/acl` delegating to `internal/application`. |
+| [`event-sourcing`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/event-sourcing) | Event log + projection | Append-only events via `eventsalsa/store` paired with a projected read view. |
 
 <!-- TODO(cqrs/persistence): Hidden until cqrs/persistence introduces initial/evolve/decide.
 

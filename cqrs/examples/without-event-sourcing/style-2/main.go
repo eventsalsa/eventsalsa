@@ -1,0 +1,153 @@
+// Package main wires Style 2: top-level Protobuf commands and queries, private domain
+// commands inside internal/domain, write handlers inside internal/application, command.Func
+// ACL translators inside internal/infra/acl, and DB/query handlers inside internal/infra.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"time"
+
+	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/commands"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/application"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/domain"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/infra/acl"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/infra/persistence"
+	infraqueries "eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/internal/infra/queries"
+	"eventsalsa.dev/cqrs/examples/without-event-sourcing/style-2/queries"
+	"eventsalsa.dev/cqrs/query"
+)
+
+func newCommandBus(db *persistence.MemoryDB, logger *slog.Logger) (*command.Bus, error) {
+	bus, err := command.NewBus(
+		command.WithMiddleware(
+			command.ObservabilityMiddleware(),
+			command.RetryMiddleware(command.RetryConfig{
+				MaxAttempts: 3,
+				BaseBackoff: 5 * time.Millisecond,
+				MaxBackoff:  25 * time.Millisecond,
+				RetryIf: func(err error) bool {
+					return errors.Is(err, persistence.ErrTransientWrite)
+				},
+			}),
+		),
+		command.WithErrorClassifier(func(err error) error {
+			if errors.Is(err, domain.ErrAlreadyCanceled) ||
+				errors.Is(err, domain.ErrInvalidOrderTotal) ||
+				errors.Is(err, domain.ErrEmptyCommand) {
+				return command.Reject(err)
+			}
+			return err
+		}),
+		command.WithOnRejected(func(ctx context.Context, rejected any, err error) {
+			logger.WarnContext(ctx, "command rejected",
+				"trace_id", cqrs.TraceIDFromContext(ctx),
+				"command_type", fmt.Sprintf("%T", rejected),
+				"err", err,
+			)
+		}),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	placeOrderApp := &application.PlaceOrderHandler{
+		Orders: db,
+		Logger: logger,
+	}
+	if regErr := command.Register(bus, acl.NewPlaceOrderACL(placeOrderApp)); regErr != nil {
+		return nil, regErr
+	}
+
+	cancelOrderApp := &application.CancelOrderHandler{
+		Orders: db,
+	}
+	if regErr := command.Register(bus, acl.NewCancelOrderACL(cancelOrderApp)); regErr != nil {
+		return nil, regErr
+	}
+	return bus, nil
+}
+
+func newQueryBus(db *persistence.MemoryDB) (*query.Bus, error) {
+	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
+	if err != nil {
+		return nil, err
+	}
+	if regErr := query.Register(qBus, &infraqueries.GetOrderSummaryHandler{DB: db}); regErr != nil {
+		return nil, regErr
+	}
+	return qBus, nil
+}
+
+func run(ctx context.Context) error {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	db := persistence.NewMemoryDB()
+
+	cmdBus, err := newCommandBus(db, logger)
+	if err != nil {
+		return err
+	}
+	qBus, err := newQueryBus(db)
+	if err != nil {
+		return err
+	}
+
+	reqCtx := cqrs.WithTraceID(ctx, "req-style2-1")
+
+	if dispatchErr := cmdBus.Dispatch(reqCtx, &commands.PlaceOrder{
+		OrderId:    "ord-100",
+		CustomerId: "cust-42",
+		TotalCents: 14900,
+	}); dispatchErr != nil {
+		return dispatchErr
+	}
+
+	summary, err := query.Execute[*queries.OrderSummary](
+		reqCtx,
+		qBus,
+		&queries.GetOrderSummary{OrderId: "ord-100"},
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Read DTO after PlaceOrder:  order_id=%s customer=%s status=%s total=%s\n",
+		summary.GetOrderId(), summary.GetCustomerName(), summary.GetStatus(), summary.GetDisplayTotal())
+
+	// Cancel once succeeds; canceling again is masked as a domain rejection via WithOnRejected.
+	if dispatchErr := cmdBus.Dispatch(reqCtx, &commands.CancelOrder{
+		OrderId: "ord-100",
+		Reason:  "customer request",
+	}); dispatchErr != nil {
+		return dispatchErr
+	}
+	if dispatchErr := cmdBus.Dispatch(reqCtx, &commands.CancelOrder{
+		OrderId: "ord-100",
+		Reason:  "duplicate click",
+	}); dispatchErr != nil {
+		return dispatchErr
+	}
+
+	summary, err = query.Execute[*queries.OrderSummary](
+		reqCtx,
+		qBus,
+		&queries.GetOrderSummary{OrderId: "ord-100"},
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Read DTO after CancelOrder: order_id=%s customer=%s status=%s total=%s\n",
+		summary.GetOrderId(), summary.GetCustomerName(), summary.GetStatus(), summary.GetDisplayTotal())
+	return nil
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
