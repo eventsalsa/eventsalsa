@@ -128,7 +128,7 @@ jobs:
                   (.key == "encryption_gcpkms" and ($encryption_gcpkms == "true" or $encryption == "true")) or
                   (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true")) or
                   (.key == "cqrs" and $cqrs == "true") or
-                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs == "true"))
+                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs == "true" or $store == "true"))
                 ) ]')
           fi
           if [ "$TARGET" = "security" ]; then
