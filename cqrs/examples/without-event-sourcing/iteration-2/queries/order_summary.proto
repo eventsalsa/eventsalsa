@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package orders.queries.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/queries;queries";
+
+// OrderSummary is a UI/API-ready projection DTO shaped for callers.
+message OrderSummary {
+  string order_id = 1;
+  string customer_name = 2;
+  string status = 3;
+  string display_total = 4;
+}

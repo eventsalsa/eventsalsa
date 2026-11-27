@@ -1,6 +1,7 @@
 .PHONY: build check fmt fmt-check golangci govulncheck gosec lint test test-integration vet
 
 SUBMODULES := kek/awskms kek/gcpkms examples
+SECURITY_SUBMODULES := kek/awskms kek/gcpkms
 ROOT_CONFIG := $(abspath $(CURDIR)/../.golangci.yml)
 
 ## Run the full local check suite mirrored by CI and the security workflow.
@@ -57,15 +58,15 @@ gosec:
 	tmp=$$(mktemp --suffix=.sarif); \
 	gosec -exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
 	rm -f "$$tmp"
-	@for mod in $(SUBMODULES); do \
+	@for mod in $(SECURITY_SUBMODULES); do \
 		tmp=$$(mktemp --suffix=.sarif); \
 		(cd "$$mod" && gosec -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \
 	done
 
-## Run govulncheck across root module and sub-modules
+## Run govulncheck across root module and published sub-modules
 govulncheck:
 	govulncheck ./...
-	@for mod in $(SUBMODULES); do \
+	@for mod in $(SECURITY_SUBMODULES); do \
 		govulncheck -C "$$mod" ./...; \
 	done

@@ -10,6 +10,7 @@ A component-based, PostgreSQL-native stack for event sourcing in Go — hosted a
 | **Projector** | `eventsalsa.dev/projector` | Horizontally scalable async projection daemon with PostgreSQL MVCC visibility-horizon checkpointing, leader election, and telemetry |
 | **Snapshot** | `eventsalsa.dev/snapshot` | Generic (`[T any]`) stream state snapshotting with pluggable codecs, payload transformers, and schema upcasters |
 | **Encryption** | `eventsalsa.dev/encryption` | KMS-native envelope encryption (`kek/local`, `kek/awskms`, `kek/gcpkms`), AAD scope binding, GDPR crypto-shredding, and blind indexing |
+| **CQRS** | `eventsalsa.dev/cqrs` | Transport-free `cqrs/command` (`Bus.Dispatch`), `cqrs/query` (`Execute`), observability middleware, jittered retries, and `cqrs/spectest` BDD specs (`0.0.x` pre-release) |
 
 ## Installation
 
@@ -18,13 +19,14 @@ go get eventsalsa.dev/store
 go get eventsalsa.dev/projector
 go get eventsalsa.dev/snapshot
 go get eventsalsa.dev/encryption
+go get eventsalsa.dev/cqrs
 
 # Optional Cloud KMS providers (isolated Go sub-modules)
 go get eventsalsa.dev/encryption/kek/awskms
 go get eventsalsa.dev/encryption/kek/gcpkms
 ```
 
-Requires Go `1.27.4+` and PostgreSQL (`pgx/v5`).
+Requires Go `1.27.4+`. PostgreSQL (`pgx/v5`) is required for `store`, `projector`, `snapshot`, and `encryption`; `eventsalsa.dev/cqrs` is standalone with zero database dependencies.
 
 ## Documentation
 
@@ -41,6 +43,7 @@ eventsalsa/
 │   ├── kek/awskms/         # Module: eventsalsa.dev/encryption/kek/awskms
 │   ├── kek/gcpkms/         # Module: eventsalsa.dev/encryption/kek/gcpkms
 │   └── examples/           # Non-published runnable examples
+├── cqrs/                   # Module: eventsalsa.dev/cqrs
 └── docs/                   # Astro + Starlight website & Go vanity endpoint
 ```
 
@@ -55,6 +58,7 @@ make check-store
 make check-snapshot
 make check-projector
 make check-encryption
+make check-cqrs
 ```
 
 ## License

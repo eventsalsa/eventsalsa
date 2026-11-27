@@ -15,7 +15,6 @@ const featureCards = [
 		href: `${baseUrl}documentation/components/store/`,
 		description:
 			'Append-only event storage with optimistic concurrency and a transaction-first API.',
-		tags: ['PostgreSQL-backed', 'Append-only', 'Optimistic concurrency'],
 	},
 	{
 		name: 'eventsalsa/projector',
@@ -24,7 +23,14 @@ const featureCards = [
 		href: `${baseUrl}documentation/components/projector/`,
 		description:
 			'Run async projections across one or more daemon instances, with PostgreSQL-backed rebalancing.',
-		tags: ['PostgreSQL-native', 'Distributed daemon', 'Dynamic filtering'],
+	},
+	{
+		name: 'eventsalsa/cqrs',
+		icon: 'alt_route',
+		tone: 'primary',
+		href: `${baseUrl}documentation/components/cqrs/`,
+		description:
+			'Separate write commands from read queries with transport-free buses, middlewares, and observability.',
 	},
 	{
 		name: 'eventsalsa/encryption',
@@ -182,13 +188,6 @@ const projectorCodeLines = [
 								</div>
 								<h3>{card.name}</h3>
 								<p>{card.description}</p>
-								{card.tags && (
-									<ul class="feature-tags" aria-label={`${card.name} highlights`}>
-										{card.tags.map((tag) => (
-											<li>{tag}</li>
-										))}
-									</ul>
-								)}
 								<a class="card-read-more" href={card.href}>Read more →</a>
 							</article>
 						))
@@ -694,27 +693,6 @@ const projectorCodeLines = [
 		color: var(--color-secondary);
 	}
 
-	.feature-tags {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.55rem;
-		padding: 0;
-		margin: 1.25rem 0 0;
-		list-style: none;
-	}
-
-	.feature-tags li {
-		padding: 0.42rem 0.72rem;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--color-surface-highest) 70%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-outline-variant) 28%, transparent);
-		font-family: var(--font-mono);
-		font-size: 0.72rem;
-		font-weight: 500;
-		letter-spacing: 0.04em;
-		color: var(--color-primary);
-	}
-
 	.feature-card .card-read-more {
 		margin-top: auto;
 		align-self: flex-end;
@@ -900,6 +878,7 @@ const projectorCodeLines = [
 	}
 
 	@media (min-width: 48rem) {
+		.feature-grid,
 		.benefit-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
@@ -925,12 +904,14 @@ const projectorCodeLines = [
 			padding-inline: 2rem;
 		}
 
-		.feature-grid {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-		}
-
 		.benefit-grid {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+
+	@media (min-width: 72rem) {
+		.feature-grid {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
 		}
 	}
 

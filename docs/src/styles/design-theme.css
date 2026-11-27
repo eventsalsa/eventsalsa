@@ -354,6 +354,31 @@ site-search.docs-search button[data-open-modal] svg {
 	box-shadow: var(--shadow-soft);
 }
 
+.sl-markdown img {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	border-radius: 0.75rem;
+	border: 1px solid var(--color-outline-variant);
+	box-shadow: var(--shadow-soft);
+}
+
+.diagram-light {
+	display: none;
+}
+
+.diagram-dark {
+	display: block;
+}
+
+:root[data-theme='light'] .diagram-light {
+	display: block;
+}
+
+:root[data-theme='light'] .diagram-dark {
+	display: none;
+}
+
 .sl-markdown :not(pre) > code {
 	background: var(--color-surface-high);
 	border-radius: 0.5rem;
@@ -445,7 +470,7 @@ site-search.docs-search button[data-open-modal] svg {
 	}
 
 	.docs-component-grid .card-grid {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 }
 

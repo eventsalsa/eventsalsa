@@ -87,14 +87,14 @@ updates:
           - "*"
 
   - package-ecosystem: "gomod"
-    directory: "/encryption/examples"
+    directory: "/cqrs"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "fix(deps)"
       prefix-development: "fix(deps)"
     groups:
-      encryption-examples-dependencies:
+      cqrs-dependencies:
         patterns:
           - "*"
 

@@ -1,8 +1,9 @@
-GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples
-INTEGRATION_MODULES := store snapshot projector encryption
+GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/examples
+SECURITY_MODULES := $(filter-out encryption/examples cqrs/examples,$(GO_MODULES))
+INTEGRATION_MODULES := store snapshot projector encryption cqrs
 
 .PHONY: help check fmt fmt-check vet lint build test test-unit test-integration gosec vuln docs-build \
-	check-store check-snapshot check-projector check-encryption
+	check-store check-snapshot check-projector check-encryption check-cqrs
 
 help: ## Show available targets
 	@echo 'Usage: make [target]'
@@ -14,7 +15,7 @@ check: fmt-check vet lint test-unit test-integration gosec vuln docs-build ## Ru
 
 fmt: ## Format Go files across all modules
 	@for mod in $(GO_MODULES); do \
-		(cd "$$mod" && gofmt -w -s . && goimports -w -local eventsalsa.dev .); \
+		(cd "$$mod" && gofmt -w -s .); \
 	done
 
 fmt-check: ## Verify formatting across all modules
@@ -63,20 +64,22 @@ test-integration: ## Run testcontainers-go integration tests (requires Docker)
 		go test -C "$$mod" -p 1 -race -count=1 -tags=integration -timeout=300s ./... || exit 1; \
 	done
 
-gosec: ## Run gosec across all Go modules
-	@for mod in $(GO_MODULES); do \
+gosec: ## Run gosec across all published Go modules
+	@for mod in $(SECURITY_MODULES); do \
 		echo "==> gosec ($$mod)"; \
 		tmp=$$(mktemp --suffix=.sarif); \
 		extra=""; \
 		if [ "$$mod" = "encryption" ]; then \
 			extra="-exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples"; \
+		elif [ "$$mod" = "cqrs" ]; then \
+			extra="-exclude-dir=examples"; \
 		fi; \
 		(cd "$$mod" && gosec $$extra -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \
 	done
 
-vuln: ## Run govulncheck across all Go modules
-	@for mod in $(GO_MODULES); do \
+vuln: ## Run govulncheck across all published Go modules
+	@for mod in $(SECURITY_MODULES); do \
 		echo "==> govulncheck ($$mod)"; \
 		govulncheck -C "$$mod" ./... || exit 1; \
 	done
@@ -97,3 +100,6 @@ check-projector: ## Run full Go check suite for projector
 
 check-encryption: ## Run full Go check suite for encryption and KMS/example submodules
 	$(MAKE) -C encryption check
+
+check-cqrs: ## Run full Go check suite for cqrs
+	$(MAKE) -C cqrs check

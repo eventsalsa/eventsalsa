@@ -39,6 +39,13 @@
       "component": "encryption/kek/gcpkms",
       "initial-version": "0.0.1",
       "changelog-path": "CHANGELOG.md"
+    },
+    "cqrs": {
+      "release-type": "go",
+      "component": "cqrs",
+      "initial-version": "0.0.1",
+      "versioning": "always-bump-patch",
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

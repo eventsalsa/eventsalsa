@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package orders.commands.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/commands;commands";
+
+// PlaceOrder requests creation of a customer order.
+message PlaceOrder {
+  string order_id = 1;
+  string customer_id = 2;
+  int64 total_cents = 3;
+}
