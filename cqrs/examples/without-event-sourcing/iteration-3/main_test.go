@@ -9,9 +9,10 @@ import (
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/acl"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
+	infrapersistence "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
 	infraqueries "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/queries"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/queries"
+	"eventsalsa.dev/cqrs/persistence"
 	"eventsalsa.dev/cqrs/query"
 )
 
@@ -19,7 +20,7 @@ func TestIteration3Example(t *testing.T) {
 	t.Parallel()
 
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
-	db := persistence.NewMemoryDB()
+	db := infrapersistence.NewMemoryDB()
 
 	cmdBus, err := newCommandBus(db)
 	if err != nil {
@@ -97,15 +98,14 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 	t.Parallel()
 
 	ctx := cqrs.WithTraceID(context.Background(), "test-nil-trace")
-	db := persistence.NewMemoryDB()
+	db := infrapersistence.NewMemoryDB()
 
-	orders := persistence.Decider[domain.Order, any]{
-		Repo:    db,
+	orders := persistence.MustNewStateRunner(db, persistence.Decider[domain.Order, any]{
 		Initial: domain.InitialOrder,
 		Evolve:  domain.EvolveOrder,
-	}
+	})
 
-	placeACL := acl.NewPlaceOrderACL(persistence.NewCommandHandler(
+	placeACL := acl.NewPlaceOrderACL(persistence.MustNewCommandHandler(
 		orders,
 		func(cmd domain.PlaceOrder) string { return cmd.OrderID },
 		domain.DecidePlaceOrder,
@@ -114,7 +114,7 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 		t.Fatalf("placeACL(nil) err = %v, want %v", err, acl.ErrEmptyCommand)
 	}
 
-	cancelACL := acl.NewCancelOrderACL(persistence.NewCommandHandler(
+	cancelACL := acl.NewCancelOrderACL(persistence.MustNewCommandHandler(
 		orders,
 		func(cmd domain.CancelOrder) string { return cmd.OrderID },
 		domain.DecideCancelOrder,

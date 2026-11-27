@@ -1,6 +1,7 @@
 .PHONY: help check test test-unit test-integration lint fmt fmt-check vet gosec govulncheck build
 
-SUBMODULES := examples
+SUBMODULES := persistence examples
+SECURITY_SUBMODULES := persistence
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -39,13 +40,21 @@ fmt: ## Format code across cqrs and examples
 fmt-check: ## Check code formatting across cqrs and examples
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "run make fmt to fix"; exit 1; }
 
-gosec: ## Run gosec security scanner (published module only)
+gosec: ## Run gosec security scanner (published modules only)
 	@tmp=$$(mktemp --suffix=.sarif); \
-	gosec -exclude-dir=examples -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
+	gosec -exclude-dir=examples -exclude-dir=persistence -fmt sarif -out "$$tmp" ./... || { rm -f "$$tmp"; exit 1; }; \
 	rm -f "$$tmp"
+	@for mod in $(SECURITY_SUBMODULES); do \
+		tmp=$$(mktemp --suffix=.sarif); \
+		(cd "$$mod" && gosec -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
+		rm -f "$$tmp"; \
+	done
 
-govulncheck: ## Run vulnerability checker (published module only)
+govulncheck: ## Run vulnerability checker (published modules only)
 	govulncheck ./...
+	@for mod in $(SECURITY_SUBMODULES); do \
+		govulncheck -C "$$mod" ./... || exit 1; \
+	done
 
 build: ## Build all packages across cqrs and examples
 	go build -v ./...

@@ -1,4 +1,4 @@
-GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/examples
+GO_MODULES := store snapshot projector encryption encryption/kek/awskms encryption/kek/gcpkms encryption/examples cqrs cqrs/persistence cqrs/examples
 SECURITY_MODULES := $(filter-out encryption/examples cqrs/examples,$(GO_MODULES))
 INTEGRATION_MODULES := store snapshot projector encryption cqrs
 
@@ -72,7 +72,7 @@ gosec: ## Run gosec across all published Go modules
 		if [ "$$mod" = "encryption" ]; then \
 			extra="-exclude-dir=kek/awskms -exclude-dir=kek/gcpkms -exclude-dir=examples"; \
 		elif [ "$$mod" = "cqrs" ]; then \
-			extra="-exclude-dir=examples"; \
+			extra="-exclude-dir=examples -exclude-dir=persistence"; \
 		fi; \
 		(cd "$$mod" && gosec $$extra -fmt sarif -out "$$tmp" ./...) || { rm -f "$$tmp"; exit 1; }; \
 		rm -f "$$tmp"; \

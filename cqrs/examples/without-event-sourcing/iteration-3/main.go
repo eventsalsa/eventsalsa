@@ -1,6 +1,6 @@
 // Package main wires Iteration 3: top-level Protobuf contracts, command.Func ACL
-// translators inside internal/infra/acl, generic Decider persistence wiring in
-// internal/infra/persistence, pure Initial/Decide/Evolve domain logic in internal/domain,
+// translators inside internal/infra/acl, generic Decider persistence runners from
+// eventsalsa.dev/cqrs/persistence, pure Initial/Decide/Evolve domain logic in internal/domain,
 // and state read handlers inside internal/infra/queries.
 package main
 
@@ -16,13 +16,14 @@ import (
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/commands"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/acl"
-	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
+	infrapersistence "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/persistence"
 	infraqueries "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/infra/queries"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/queries"
+	"eventsalsa.dev/cqrs/persistence"
 	"eventsalsa.dev/cqrs/query"
 )
 
-func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
+func newCommandBus(db *infrapersistence.MemoryDB) (*command.Bus, error) {
 	bus, err := command.NewBus(
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
@@ -31,7 +32,7 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 				BaseBackoff: 5 * time.Millisecond,
 				MaxBackoff:  25 * time.Millisecond,
 				RetryIf: func(err error) bool {
-					return errors.Is(err, persistence.ErrTransientWrite)
+					return errors.Is(err, infrapersistence.ErrTransientWrite)
 				},
 			}),
 		),
@@ -55,33 +56,41 @@ func newCommandBus(db *persistence.MemoryDB) (*command.Bus, error) {
 		return nil, err
 	}
 
-	orders := persistence.Decider[domain.Order, any]{
-		Repo:    db,
+	orders, err := persistence.NewStateRunner(db, persistence.Decider[domain.Order, any]{
 		Initial: domain.InitialOrder,
 		Evolve:  domain.EvolveOrder,
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	placeHandler := persistence.NewCommandHandler(
+	placeHandler, err := persistence.NewCommandHandler(
 		orders,
 		func(cmd domain.PlaceOrder) string { return cmd.OrderID },
 		domain.DecidePlaceOrder,
 	)
+	if err != nil {
+		return nil, err
+	}
 	if regErr := command.Register(bus, acl.NewPlaceOrderACL(placeHandler)); regErr != nil {
 		return nil, regErr
 	}
 
-	cancelHandler := persistence.NewCommandHandler(
+	cancelHandler, err := persistence.NewCommandHandler(
 		orders,
 		func(cmd domain.CancelOrder) string { return cmd.OrderID },
 		domain.DecideCancelOrder,
 	)
+	if err != nil {
+		return nil, err
+	}
 	if regErr := command.Register(bus, acl.NewCancelOrderACL(cancelHandler)); regErr != nil {
 		return nil, regErr
 	}
 	return bus, nil
 }
 
-func newQueryBus(db *persistence.MemoryDB) (*query.Bus, error) {
+func newQueryBus(db *infrapersistence.MemoryDB) (*query.Bus, error) {
 	qBus, err := query.NewBus(query.WithMiddleware(query.ObservabilityMiddleware()))
 	if err != nil {
 		return nil, err
@@ -93,7 +102,7 @@ func newQueryBus(db *persistence.MemoryDB) (*query.Bus, error) {
 }
 
 func run(ctx context.Context) error {
-	db := persistence.NewMemoryDB()
+	db := infrapersistence.NewMemoryDB()
 
 	cmdBus, err := newCommandBus(db)
 	if err != nil {

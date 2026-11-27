@@ -9,5 +9,6 @@ use (
 	./encryption/kek/gcpkms
 	./encryption/examples
 	./cqrs
+	./cqrs/persistence
 	./cqrs/examples
 )

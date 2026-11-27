@@ -9,12 +9,13 @@ import (
 
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/internal/domain"
 	pbqueries "eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-3/queries"
+	cqrspersistence "eventsalsa.dev/cqrs/persistence"
 )
 
 // ErrTransientWrite simulates a retryable optimistic/serialization conflict.
 var ErrTransientWrite = errors.New("transient database write conflict")
 
-// MemoryDB simulates state-based SQL persistence implementing StateRepository[domain.Order]
+// MemoryDB simulates state-based SQL persistence implementing cqrspersistence.StateRepository[domain.Order]
 // alongside direct presentation read queries (no event store).
 type MemoryDB struct {
 	orders        map[string]domain.Order
@@ -33,13 +34,13 @@ func NewMemoryDB() *MemoryDB {
 	return db
 }
 
-// Load retrieves stored Order decision state, returning ErrNotFound when absent.
+// Load retrieves stored Order decision state, returning cqrspersistence.ErrNotFound when absent.
 func (db *MemoryDB) Load(_ context.Context, orderID string) (domain.Order, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	order, ok := db.orders[orderID]
 	if !ok {
-		return domain.Order{}, ErrNotFound
+		return domain.Order{}, cqrspersistence.ErrNotFound
 	}
 	return order, nil
 }
@@ -61,7 +62,7 @@ func (db *MemoryDB) SelectOrderSummary(orderID string) (*pbqueries.OrderSummary,
 	defer db.mu.RUnlock()
 	order, ok := db.orders[orderID]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, cqrspersistence.ErrNotFound
 	}
 	return &pbqueries.OrderSummary{
 		OrderId:      order.ID,
