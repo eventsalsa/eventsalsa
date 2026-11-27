@@ -1,51 +1,74 @@
 package domain_test
 
 import (
+	"errors"
+	"reflect"
 	"testing"
 
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-1/internal/domain/events"
-	"eventsalsa.dev/cqrs/spectest"
 )
 
-type placeSpec struct {
-	customerID string
-	totalCents int64
-}
-
-type confirmSpec struct{}
-
-func decidePlaceSpec(o domain.Order, in placeSpec) ([]any, error) {
-	return domain.Place(o, in.customerID, in.totalCents)
-}
-
-func decideConfirmSpec(o domain.Order, _ confirmSpec) ([]any, error) {
-	return domain.Confirm(o)
-}
-
-func TestOrderDomainSpecs(t *testing.T) {
+func TestPlaceOrder(t *testing.T) {
 	t.Parallel()
 
-	spec := spectest.For(t, domain.InitialOrder, domain.EvolveOrder)
+	order, err := domain.PlaceOrder("ord-1", "cust-42", 12900)
+	if err != nil {
+		t.Fatalf("PlaceOrder unexpected error: %v", err)
+	}
+	if !order.Placed || order.TotalCents != 12900 || order.CustomerID != "cust-42" {
+		t.Fatalf("unexpected order state: %+v", order)
+	}
+	if order.Version() != 0 {
+		t.Fatalf("Version() = %d, want 0", order.Version())
+	}
+	wantEvents := []any{events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900}}
+	if !reflect.DeepEqual(order.UncommittedEvents(), wantEvents) {
+		t.Fatalf("UncommittedEvents() = %#v, want %#v", order.UncommittedEvents(), wantEvents)
+	}
 
-	spec.When("ord-1", placeSpec{customerID: "cust-42", totalCents: 12900}, decidePlaceSpec).
-		Then(events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900}).
-		ThenState(func(o domain.Order) {
-			if !o.Placed || o.TotalCents != 12900 {
-				t.Fatalf("unexpected order: %+v", o)
-			}
-		})
+	if _, invalidErr := domain.PlaceOrder("ord-2", "cust-42", 0); !errors.Is(invalidErr, domain.ErrInvalidAmount) {
+		t.Fatalf("zero total err = %v, want %v", invalidErr, domain.ErrInvalidAmount)
+	}
+}
 
-	spec.When("ord-1", placeSpec{customerID: "cust-42", totalCents: 0}, decidePlaceSpec).
-		ThenErrorIs(domain.ErrInvalidAmount)
+func TestOrderReconstituteAndConfirm(t *testing.T) {
+	t.Parallel()
 
-	spec.Given(
-		events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900},
-		events.OrderConfirmed{},
-	).When("ord-1", confirmSpec{}, decideConfirmSpec).
-		ThenNoEvents()
+	unplaced := domain.ReconstituteOrder("ord-0", 0)
+	if notPlacedErr := unplaced.Confirm(); !errors.Is(notPlacedErr, domain.ErrNotPlaced) {
+		t.Fatalf("Confirm on unplaced err = %v, want %v", notPlacedErr, domain.ErrNotPlaced)
+	}
 
-	spec.Given().
-		When("ord-1", confirmSpec{}, decideConfirmSpec).
-		ThenErrorIs(domain.ErrNotPlaced)
+	order := domain.ReconstituteOrder("ord-1", 1)
+	order.Evolve(events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900})
+
+	if order.Version() != 1 {
+		t.Fatalf("Version() = %d, want 1", order.Version())
+	}
+	if len(order.UncommittedEvents()) != 0 {
+		t.Fatalf("Evolve should not record uncommitted events, got %#v", order.UncommittedEvents())
+	}
+
+	if confirmErr := order.Confirm(); confirmErr != nil {
+		t.Fatalf("Confirm unexpected error: %v", confirmErr)
+	}
+	if !order.Confirmed {
+		t.Fatal("expected Confirmed == true")
+	}
+	wantEvents := []any{events.OrderConfirmed{}}
+	if !reflect.DeepEqual(order.UncommittedEvents(), wantEvents) {
+		t.Fatalf("UncommittedEvents() = %#v, want %#v", order.UncommittedEvents(), wantEvents)
+	}
+
+	// Idempotent confirmation on already confirmed reconstituted aggregate records no events.
+	confirmed := domain.ReconstituteOrder("ord-1", 2)
+	confirmed.Evolve(events.OrderPlaced{CustomerID: "cust-42", TotalCents: 12900})
+	confirmed.Evolve(events.OrderConfirmed{})
+	if idempotentErr := confirmed.Confirm(); idempotentErr != nil {
+		t.Fatalf("idempotent Confirm unexpected error: %v", idempotentErr)
+	}
+	if len(confirmed.UncommittedEvents()) != 0 {
+		t.Fatalf("expected 0 uncommitted events on idempotent Confirm, got %#v", confirmed.UncommittedEvents())
+	}
 }

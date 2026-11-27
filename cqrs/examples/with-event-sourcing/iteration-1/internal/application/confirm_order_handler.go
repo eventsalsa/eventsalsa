@@ -9,21 +9,17 @@ import (
 
 // ConfirmOrderHandler implements command.Handler[commands.ConfirmOrder].
 type ConfirmOrderHandler struct {
-	Orders OrderEventStore
+	Orders domain.OrderRepository
 }
 
-// Handle reconstitutes the order stream, evaluates confirmation rules, and appends emitted facts.
+// Handle loads the Order aggregate, applies confirmation invariants, and saves changes.
 func (h *ConfirmOrderHandler) Handle(ctx context.Context, cmd commands.ConfirmOrder) error {
-	state, version, err := h.Orders.Load(ctx, cmd.OrderID)
+	order, err := h.Orders.Load(ctx, cmd.OrderID)
 	if err != nil {
 		return err
 	}
-	events, decideErr := domain.Confirm(state)
-	if decideErr != nil {
-		return decideErr
+	if confirmErr := order.Confirm(); confirmErr != nil {
+		return confirmErr
 	}
-	if len(events) == 0 {
-		return nil
-	}
-	return h.Orders.Append(ctx, cmd.OrderID, version, events)
+	return h.Orders.Save(ctx, order)
 }

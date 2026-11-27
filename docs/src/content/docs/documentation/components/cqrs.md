@@ -403,7 +403,7 @@ Dedicated `cqrs/persistence` helpers will arrive in a follow-up module. Meanwhil
 | [`without-event-sourcing/iteration-1`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/iteration-1) | Single in-memory DB | Direct exported Go `commands`/`queries` structs; `internal/domain` invariants; `internal/application` write handlers; `internal/infra` persistence and read handlers. |
 | [`without-event-sourcing/iteration-2`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/iteration-2) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; `command.Func` ACL adapters in `internal/infra/acl` mapping to `internal/application` use-case commands; `internal/domain` entity invariants. |
 | [`without-event-sourcing/iteration-3`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/without-event-sourcing/iteration-3) | Single in-memory DB | Top-level Protobuf `commands`/`queries` contracts; `command.Func` ACL adapters; generic `Decider`/`StateRepository` runner in `internal/infra/persistence`; pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`. |
-| [`with-event-sourcing/iteration-1`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/with-event-sourcing/iteration-1) | Event log + projection | Exported Go `commands`/`queries` structs; pure `internal/domain` rules tested via `cqrs/spectest`; `internal/application` handlers over `OrderEventStore`; `internal/infra` PostgreSQL `eventmap-gen` mappings, `eventsalsa/store`, and inline projection. |
+| [`with-event-sourcing/iteration-1`](https://github.com/eventsalsa/eventsalsa/tree/main/cqrs/examples/with-event-sourcing/iteration-1) | Event log + projection | Exported Go `commands`/`queries` structs; `internal/domain` event-sourced `Order` aggregate & `OrderRepository` (`Load`/`Save`); `internal/application` handlers; `internal/infra` PostgreSQL `eventmap-gen` mappings, `eventsalsa/store`, and inline projection. |
 
 <!-- TODO(cqrs/persistence): Hidden until cqrs/persistence introduces initial/evolve/decide.
 
@@ -432,40 +432,40 @@ type OrderConfirmed struct{}
 type PlaceOrder struct{ CustomerID string }
 type ConfirmOrder struct{}
 
-type OrderState struct {
+type Order struct {
 	ID         string
 	CustomerID string
 	Placed     bool
 	Confirmed  bool
 }
 
-func initialOrder(id string) OrderState {
-	return OrderState{ID: id}
+func initialOrder(id string) Order {
+	return Order{ID: id}
 }
 
-func evolveOrder(s OrderState, ev any) OrderState {
+func evolveOrder(o Order, ev any) Order {
 	switch e := ev.(type) {
 	case OrderPlaced:
-		s.CustomerID = e.CustomerID
-		s.Placed = true
+		o.CustomerID = e.CustomerID
+		o.Placed = true
 	case OrderConfirmed:
-		s.Confirmed = true
+		o.Confirmed = true
 	}
-	return s
+	return o
 }
 
-func decidePlaceOrder(s OrderState, cmd PlaceOrder) ([]any, error) {
-	if s.Placed {
+func decidePlaceOrder(o Order, cmd PlaceOrder) ([]any, error) {
+	if o.Placed {
 		return nil, errAlreadyPlaced
 	}
 	return []any{OrderPlaced{CustomerID: cmd.CustomerID}}, nil
 }
 
-func decideConfirmOrder(s OrderState, _ ConfirmOrder) ([]any, error) {
-	if !s.Placed {
+func decideConfirmOrder(o Order, _ ConfirmOrder) ([]any, error) {
+	if !o.Placed {
 		return nil, errNotPlaced
 	}
-	if s.Confirmed {
+	if o.Confirmed {
 		return nil, nil // idempotent no-op
 	}
 	return []any{OrderConfirmed{}}, nil
@@ -478,9 +478,9 @@ func TestOrderSpecs(t *testing.T) {
 
 	spec.When("ord-1", PlaceOrder{CustomerID: "cust-42"}, decidePlaceOrder).
 		Then(OrderPlaced{CustomerID: "cust-42"}).
-		ThenState(func(s OrderState) {
-			if !s.Placed || s.CustomerID != "cust-42" {
-				t.Fatalf("unexpected state: %+v", s)
+		ThenState(func(o Order) {
+			if !o.Placed || o.CustomerID != "cust-42" {
+				t.Fatalf("unexpected state: %+v", o)
 			}
 		})
 

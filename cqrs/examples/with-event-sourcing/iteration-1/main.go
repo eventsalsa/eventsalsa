@@ -1,11 +1,11 @@
 // Package main demonstrates CQRS combined with Event Sourcing over eventsalsa/store.
 //
 // Top-level commands/ and queries/ export plain Go contracts; internal/domain holds
-// pure InitialOrder/EvolveOrder/Place/Confirm rules on Order over internal/domain/events;
-// internal/application orchestrates writes through OrderEventStore; and internal/infra
-// executes commands inside a PostgreSQL transaction middleware, maps events via
-// eventmap-gen, appends them with optimistic concurrency + causal metadata, and runs
-// OrderOverviewProjection inline into order_overview_v1.
+// the Order aggregate (PlaceOrder, Confirm, ReconstituteOrder, Evolve) and its OrderRepository
+// port over internal/domain/events; internal/application orchestrates writes through
+// domain.OrderRepository; and internal/infra executes commands inside a PostgreSQL transaction
+// middleware, maps events via eventmap-gen, appends them with optimistic concurrency + causal
+// metadata, and runs OrderOverviewProjection inline into order_overview_v1.
 package main
 
 import (
@@ -43,6 +43,7 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		),
 		command.WithErrorClassifier(func(err error) error {
 			if errors.Is(err, domain.ErrAlreadyPlaced) ||
+				errors.Is(err, domain.ErrOrderNotFound) ||
 				errors.Is(err, domain.ErrNotPlaced) ||
 				errors.Is(err, domain.ErrInvalidAmount) {
 				return command.Reject(err)
@@ -54,7 +55,7 @@ func newCommandBus(pool *pgxpool.Pool, es *storepostgres.Store) (*command.Bus, e
 		return nil, err
 	}
 
-	orders := &infra.OrderEventStore{
+	orders := &infra.OrderRepository{
 		Store:      es,
 		Projection: &infra.OrderOverviewProjection{},
 	}

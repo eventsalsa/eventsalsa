@@ -1,6 +1,8 @@
-# Iteration 1 — Direct Public Contracts, Application Handlers, `eventmap-gen` & `eventsalsa/store`
+# Iteration 1 — Direct Public Contracts, Domain Repository, `eventmap-gen` & `eventsalsa/store`
 
-In Iteration 1 of `with-event-sourcing`, external command (`commands/`) and query (`queries/`) contracts are exported as plain Go structs at the top level—echoing [`without-event-sourcing/iteration-1`](../../without-event-sourcing/iteration-1/)—while write rules, application orchestration, and PostgreSQL/`eventsalsa/store` persistence (with `eventmap-gen` generated event mappings) stay separated under `internal/`.
+In Iteration 1 of `with-event-sourcing`, external command (`commands/`) and query (`queries/`) contracts are exported as plain Go structs at the top level—echoing [`without-event-sourcing/iteration-1`](../../without-event-sourcing/iteration-1/)—while write-side invariants and `OrderRepository` (`Load`/`Save`) live in `internal/domain`, write use cases live in `internal/application`, and PostgreSQL/`eventsalsa/store` persistence (with `eventmap-gen` generated event mappings) lives in `internal/infra`.
+
+`Order` carries its unexported loaded stream version and uncommitted events internally so application handlers never handle event slices or stream versions directly—illustrating classic OOP event sourcing ahead of a later stateless Decider iteration with `eventsalsa.dev/cqrs/persistence`.
 
 ## Package Layout
 
@@ -14,15 +16,15 @@ iteration-1/
 │   ├── get_order_overview.go
 │   └── order_overview.go
 └── internal/
-    ├── domain/                          # Pure Order aggregate & decision rules (zero store/pgx imports)
+    ├── domain/                          # Order aggregate & repository port (zero store/pgx imports)
     │   ├── errors.go
-    │   ├── order.go                     # Order, InitialOrder, EvolveOrder, Place, Confirm
-    │   ├── order_test.go                # Given/When/Then specs via cqrs/spectest
+    │   ├── order.go                     # Order, PlaceOrder, ReconstituteOrder, Evolve, Confirm
+    │   ├── order_test.go                # Direct aggregate unit tests
+    │   ├── repository.go                # OrderRepository interface (Load, Save)
     │   └── events/                      # Pure event structs scanned by eventmap-gen
     │       ├── order_placed.go
     │       └── order_confirmed.go
-    ├── application/                     # Write-side use-case handlers + store port (1 file per command)
-    │   ├── order_event_store.go         # OrderEventStore interface (Load, Append)
+    ├── application/                     # Write-side use-case handlers (1 file per command)
     │   ├── place_order_handler.go
     │   └── confirm_order_handler.go
     └── infra/                           # PostgreSQL + eventsalsa/store adapter & read-side query handler
@@ -32,14 +34,14 @@ iteration-1/
         ├── tx.go                        # WithPgxTx middleware & tx context helpers
         ├── schema.go                    # eventsalsa/store DDL + order_overview_v1 table DDL
         ├── projection.go                # OrderOverviewProjection (projector.Projection shape, called inline)
-        ├── order_event_store.go         # OrderEventStore backed by storepostgres.Store
+        ├── order_repository.go          # OrderRepository backed by storepostgres.Store
         └── get_order_overview_handler.go# Thin SQL read handler querying order_overview_v1
 ```
 
 ## Run
 
 ```bash
-# Run pure Given/When/Then domain specs and generated mapping tests without PostgreSQL
+# Run Order aggregate unit tests and generated mapping tests without PostgreSQL
 go test -race -count=1 ./with-event-sourcing/iteration-1/...
 
 # Regenerate event mappings if domain/events/* changes
