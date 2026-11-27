@@ -101,18 +101,20 @@ type PlaceOrder struct {
 }
 ```
 
-Rather than placing business rules inside an HTTP controller or queue consumer, put validation and state persistence inside a command handler so every caller goes through the exact same domain boundary. You can implement `command.Handler[PlaceOrder]` directly on a struct or adapt a function with `command.Func[PlaceOrder]`:
+Rather than placing business rules inside an HTTP controller or queue consumer, put validation and persistence inside a command handler so every caller goes through the exact same domain boundary. Define a struct holding your dependencies with a `Handle` method implementing `command.Handler[PlaceOrder]` (or pass `command.Func[PlaceOrder]` for standalone functions):
 
 ```go
 var errInvalidTotal = errors.New("order total must be positive")
 
-func newPlaceOrderHandler(orders OrderRepository) command.Handler[PlaceOrder] {
-	return command.Func[PlaceOrder](func(ctx context.Context, cmd PlaceOrder) error {
-		if cmd.TotalCents <= 0 {
-			return errInvalidTotal
-		}
-		return orders.SaveNew(ctx, cmd.OrderID, cmd.CustomerID, cmd.TotalCents)
-	})
+type PlaceOrderHandler struct {
+	orders OrderRepository
+}
+
+func (h *PlaceOrderHandler) Handle(ctx context.Context, cmd PlaceOrder) error {
+	if cmd.TotalCents <= 0 {
+		return errInvalidTotal
+	}
+	return h.orders.SaveNew(ctx, cmd.OrderID, cmd.CustomerID, cmd.TotalCents)
 }
 ```
 
@@ -124,7 +126,7 @@ if err != nil {
 	return err
 }
 
-if regErr := command.Register(bus, newPlaceOrderHandler(orders)); regErr != nil {
+if regErr := command.Register(bus, &PlaceOrderHandler{orders: orders}); regErr != nil {
 	return regErr
 }
 ```
@@ -132,23 +134,21 @@ if regErr := command.Register(bus, newPlaceOrderHandler(orders)); regErr != nil 
 Inside your HTTP handler, CLI command, or worker, decode the request into `PlaceOrder` and call `bus.Dispatch`. The bus finds the matching handler, runs any configured middlewares around it, executes `Handle`, and returns any unmasked error:
 
 ```go
-func handleCheckout(bus *command.Bus) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		cmd := PlaceOrder{
-			OrderID:    "ord-100",
-			CustomerID: "cust-42",
-			TotalCents: 14900,
-		}
-		if err := bus.Dispatch(r.Context(), cmd); err != nil {
-			http.Error(w, "command dispatch failed", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
+mux.HandleFunc("POST /orders", func(w http.ResponseWriter, r *http.Request) {
+	err := bus.Dispatch(r.Context(), PlaceOrder{
+		OrderID:    "ord-100",
+		CustomerID: "cust-42",
+		TotalCents: 14900,
+	})
+	if err != nil {
+		http.Error(w, "command dispatch failed", http.StatusInternalServerError)
+		return
 	}
-}
+	w.WriteHeader(http.StatusAccepted)
+})
 ```
 
-If an endpoint prefers receiving an explicit typed dependency instead of routing through a shared bus, wrap a single handler directly at startup with `wrapped, err := command.Wrap(newPlaceOrderHandler(orders), mw...)` and pass that `command.Handler[PlaceOrder]` straight into `handleCheckout` to call `wrapped.Handle(ctx, cmd)`.
+If an endpoint prefers receiving an explicit typed dependency instead of routing through a shared bus, decorate a single handler directly at startup with `placeOrder, err := command.Wrap(&PlaceOrderHandler{orders: orders}, mw...)` and invoke `placeOrder.Handle(r.Context(), cmd)` directly.
 
 ### Command bus middlewares
 
@@ -275,19 +275,21 @@ type OrderView struct {
 }
 ```
 
-Unlike write handlers, queries do not enforce business invariants or rehydrate domain models. Putting a plain SQL statement with `pgx` directly inside the read handler keeps queries simple, transparent, and easy to tune per screen:
+Unlike write handlers, queries do not enforce business invariants or rehydrate domain models. Implement `query.Handler[GetOrder, OrderView]` directly on a thin reader struct with a plain SQL query using `pgx` (or pass `query.Func[GetOrder, OrderView]` for simple functions):
 
 ```go
-func newGetOrderHandler(db *pgxpool.Pool) query.Handler[GetOrder, OrderView] {
-	return query.Func[GetOrder, OrderView](func(ctx context.Context, q GetOrder) (OrderView, error) {
-		var view OrderView
-		err := db.QueryRow(ctx, `
-			SELECT order_id, status, total_cents
-			FROM orders
-			WHERE order_id = $1
-		`, q.OrderID).Scan(&view.OrderID, &view.Status, &view.TotalCents)
-		return view, err
-	})
+type GetOrderHandler struct {
+	db *pgxpool.Pool
+}
+
+func (h *GetOrderHandler) Handle(ctx context.Context, q GetOrder) (OrderView, error) {
+	var view OrderView
+	err := h.db.QueryRow(ctx, `
+		SELECT order_id, status, total_cents
+		FROM orders
+		WHERE order_id = $1
+	`, q.OrderID).Scan(&view.OrderID, &view.Status, &view.TotalCents)
+	return view, err
 }
 ```
 
@@ -299,7 +301,7 @@ if err != nil {
 	return err
 }
 
-if regErr := query.Register(qBus, newGetOrderHandler(db)); regErr != nil {
+if regErr := query.Register(qBus, &GetOrderHandler{db: db}); regErr != nil {
 	return regErr
 }
 ```
@@ -307,21 +309,19 @@ if regErr := query.Register(qBus, newGetOrderHandler(db)); regErr != nil {
 Inside your HTTP handler or API endpoint, construct `GetOrder` and call `query.Execute[OrderView]`. You provide the expected response type `OrderView` once in brackets while Go infers `GetOrder` from the argument:
 
 ```go
-func handleGetOrder(qBus *query.Bus) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		view, err := query.Execute[OrderView](r.Context(), qBus, GetOrder{
-			OrderID: r.PathValue("id"),
-		})
-		if err != nil {
-			http.Error(w, "order could not be loaded", http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(view)
+mux.HandleFunc("GET /orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+	view, err := query.Execute[OrderView](r.Context(), qBus, GetOrder{
+		OrderID: r.PathValue("id"),
+	})
+	if err != nil {
+		http.Error(w, "order could not be loaded", http.StatusInternalServerError)
+		return
 	}
-}
+	_ = json.NewEncoder(w).Encode(view)
+})
 ```
 
-If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, wrap a single handler at startup with `wrapped, err := query.Wrap(newGetOrderHandler(db), mw...)` and pass that `query.Handler[GetOrder, OrderView]` directly into `handleGetOrder` to call `wrapped.Handle(ctx, q)`.
+If an endpoint prefers receiving an explicit typed handler rather than routing through a shared bus, decorate a single handler at startup with `getOrder, err := query.Wrap(&GetOrderHandler{db: db}, mw...)` and invoke `getOrder.Handle(r.Context(), GetOrder{OrderID: id})` directly.
 
 :::tip
 **Keep query handlers lightweight and disposable**
