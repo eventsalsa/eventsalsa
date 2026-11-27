@@ -191,8 +191,15 @@ func TestIteration3ACLNilSafety(t *testing.T) {
 	}
 
 	qHandler := &infraqueries.GetOrderOverviewHandler{}
-	if _, err := qHandler.Handle(ctx, nil); !errors.Is(err, infraqueries.ErrEmptyQuery) {
-		t.Fatalf("qHandler.Handle(nil) err = %v, want %v", err, infraqueries.ErrEmptyQuery)
+	if _, err := qHandler.Handle(ctx, &queries.GetOrderOverview{OrderId: "ord-1"}); !errors.Is(err, infraqueries.ErrMissingDB) {
+		t.Fatalf("qHandler.Handle(nil DB) err = %v, want %v", err, infraqueries.ErrMissingDB)
+	}
+	if _, err := qHandler.Handle(ctx, nil); !errors.Is(err, infraqueries.ErrMissingDB) {
+		t.Fatalf("qHandler.Handle(nil DB, nil q) err = %v, want %v", err, infraqueries.ErrMissingDB)
+	}
+	var typedNilHandler *infraqueries.GetOrderOverviewHandler
+	if _, err := typedNilHandler.Handle(ctx, nil); !errors.Is(err, infraqueries.ErrMissingDB) {
+		t.Fatalf("typedNilHandler.Handle err = %v, want %v", err, infraqueries.ErrMissingDB)
 	}
 
 	qBus, err := newQueryBus(nil)

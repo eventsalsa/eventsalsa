@@ -20,8 +20,9 @@ test-unit: ## Run unit tests across cqrs and examples
 		go test -C "$$mod" -v -race -count=1 ./... || exit 1; \
 	done
 
-test-integration: ## Run in-process CQRS pipeline integration tests
+test-integration: ## Run in-process CQRS and PostgreSQL persistence integration tests
 	go test -p 1 -v -race -count=1 -tags=integration ./integration_test/...
+	$(MAKE) -C persistence/postgres test-integration
 
 vet: ## Run go vet across cqrs and examples
 	go vet ./...

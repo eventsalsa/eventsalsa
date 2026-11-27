@@ -17,6 +17,9 @@ var (
 	// ErrTxAlreadyActive indicates a transaction is already active in context.
 	ErrTxAlreadyActive = errors.New("postgres: transaction already active in context")
 
+	// ErrMissingTx indicates no active pgx.Tx was found in context for RequireTx or TxEventRepository.
+	ErrMissingTx = errors.New("postgres: missing active transaction in context")
+
 	// ErrNilFunc indicates a nil callback function was supplied.
 	ErrNilFunc = errors.New("postgres: callback func cannot be nil")
 
@@ -31,6 +34,9 @@ var (
 
 	// ErrEmptyStreamType indicates a blank StreamType was supplied.
 	ErrEmptyStreamType = errors.New("postgres: stream type must not be blank")
+
+	// ErrEmptyEventType indicates EventCodec.Encode returned a blank EventType.
+	ErrEmptyEventType = errors.New("postgres: encoded event type must not be blank")
 
 	// ErrNilProjection indicates a nil or typed-nil inline projection was supplied.
 	ErrNilProjection = errors.New("postgres: inline projection cannot be nil")

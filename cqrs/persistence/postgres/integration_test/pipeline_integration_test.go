@@ -5,7 +5,10 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,26 +139,41 @@ func TestNarrowPipeline_CausalChainInlineProjectionsAndQueryReadOnly(t *testing.
 		t.Fatalf("Dispatch #2: %v", dispatchErr)
 	}
 
-	// Command #2 received Event #1 as its CausationID, and emitted Event #2 caused by Command #2.
+	// Command #2 received Event #1 as its CausationID, and emitted Event #2 caused by Command #2
+	// in its own distinct narrow PostgreSQL write transaction.
 	if len(seenCausationIDs) != 3 || seenCausationIDs[2] != ev1ID.String() {
 		t.Fatalf("command #2 CausationID = %q, want Event #1 id %q", seenCausationIDs[2], ev1ID.String())
 	}
 	var (
 		ev2Trace string
 		ev2Cause string
+		ev2TxID  uint64
 	)
 	if scanErr := pool.QueryRow(ctx, `
-		SELECT trace_id, causation_id
+		SELECT trace_id, causation_id, transaction_id::text::bigint
 		FROM events
 		WHERE stream_type = 'Account' AND stream_id = $1 AND stream_version = 2
-	`, streamID).Scan(&ev2Trace, &ev2Cause); scanErr != nil {
+	`, streamID).Scan(&ev2Trace, &ev2Cause, &ev2TxID); scanErr != nil {
 		t.Fatalf("query event 2: %v", scanErr)
 	}
-	if ev2Trace != traceID || ev2Cause != seenCommandIDs[2] {
-		t.Fatalf("event 2 causality = (%q, %q), want (%q, %q)", ev2Trace, ev2Cause, traceID, seenCommandIDs[2])
+	if ev2Trace != traceID || ev2Cause != seenCommandIDs[2] || ev2TxID == 0 || ev2TxID == ev1TxID {
+		t.Fatalf("event 2 causality/tx = (%q, %q, %d), want (%q, %q, != %d)", ev2Trace, ev2Cause, ev2TxID, traceID, seenCommandIDs[2], ev1TxID)
 	}
 	if batchSaw != 2 {
 		t.Fatalf("batchSaw = %d, want 2", batchSaw)
+	}
+
+	loaded, ver, err := repo.Load(ctx, streamID)
+	if err != nil || ver != 2 || !slices.Equal(loaded, []any{accountCredited{Amount: 100}, accountCredited{Amount: 50}}) {
+		t.Fatalf("repo.Load = (%#v, %d, %v), want [100, 50] ver=2", loaded, ver, err)
+	}
+
+	// Multi-event single Append persists consecutive versions atomically and updates projection.
+	if appErr := repo.Append(ctx, streamID, 2, []any{accountCredited{Amount: 20}, accountCredited{Amount: 30}}); appErr != nil {
+		t.Fatalf("multi-event Append: %v", appErr)
+	}
+	if batchSaw != 4 {
+		t.Fatalf("batchSaw after multi-event = %d, want 4", batchSaw)
 	}
 
 	// Query read-only middleware serves projected view and blocks accidental writes (SQLSTATE 25006).
@@ -164,9 +182,9 @@ func TestNarrowPipeline_CausalChainInlineProjectionsAndQueryReadOnly(t *testing.
 		t.Fatalf("query.NewBus: %v", err)
 	}
 	query.MustRegister(qBus, query.Func[string, int](func(qCtx context.Context, targetID string) (int, error) {
-		tx, ok := postgres.TxFromContext(qCtx)
-		if !ok {
-			return 0, errors.New("missing read tx")
+		tx, reqErr := postgres.RequireTx(qCtx)
+		if reqErr != nil {
+			return 0, reqErr
 		}
 		var bal int
 		if qErr := tx.QueryRow(qCtx, `SELECT balance FROM order_overview_v1 WHERE order_id = $1`, targetID).Scan(&bal); qErr != nil {
@@ -175,20 +193,60 @@ func TestNarrowPipeline_CausalChainInlineProjectionsAndQueryReadOnly(t *testing.
 		return bal, nil
 	}))
 	query.MustRegister(qBus, query.Func[int, string](func(qCtx context.Context, _ int) (string, error) {
-		tx, _ := postgres.TxFromContext(qCtx)
+		tx, reqErr := postgres.RequireTx(qCtx)
+		if reqErr != nil {
+			return "", reqErr
+		}
 		_, execErr := tx.Exec(qCtx, `INSERT INTO audit_log (message) VALUES ('illegal read tx write')`)
 		return "", execErr
 	}))
 
 	bal, err := query.Execute[int](ctx, qBus, streamID)
-	if err != nil || bal != 150 {
-		t.Fatalf("query balance = (%d, %v), want (150, nil)", bal, err)
+	if err != nil || bal != 200 {
+		t.Fatalf("query balance = (%d, %v), want (200, nil)", bal, err)
 	}
 
 	_, writeInQueryErr := query.Execute[string](ctx, qBus, 1)
 	var pgErr *pgconn.PgError
 	if !errors.As(writeInQueryErr, &pgErr) || pgErr.Code != "25006" {
 		t.Fatalf("expected SQLSTATE 25006 read_only_sql_transaction, got: %v", writeInQueryErr)
+	}
+}
+
+func TestInlineProjectionErrorRollsBackStoreAppend(t *testing.T) {
+	pool := setupPool(t)
+	ctx := context.Background()
+
+	es := storepostgres.NewStore(storepostgres.DefaultStoreConfig())
+	codec, err := eventMapAccountCodec()
+	if err != nil {
+		t.Fatalf("codec: %v", err)
+	}
+
+	projFail := errors.New("projection constraint fail")
+	repo, err := postgres.NewEventRepository(postgres.EventRepositoryConfig[any]{
+		DB:         pool,
+		EventStore: es,
+		StreamType: "ProjRollback",
+		Codec:      codec,
+		Projections: []postgres.Projection{
+			postgres.ProjectionFunc(func(context.Context, pgx.Tx, store.PersistedEvent) error {
+				return projFail
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEventRepository: %v", err)
+	}
+
+	id := "pr-" + uuid.NewString()
+	if appErr := repo.Append(ctx, id, 0, []any{accountCredited{Amount: 55}}); !errors.Is(appErr, projFail) {
+		t.Fatalf("Append err = %v, want %v", appErr, projFail)
+	}
+
+	events, ver, loadErr := repo.Load(ctx, id)
+	if loadErr != nil || ver != 0 || len(events) != 0 {
+		t.Fatalf("expected rolled back stream after projection error, got events=%v ver=%d err=%v", events, ver, loadErr)
 	}
 }
 
@@ -252,7 +310,7 @@ func (r *pgStateRepo) Save(ctx context.Context, id string, expectedVersion int64
 	})
 }
 
-func TestStateRepository_PostgresNarrowInReadTxAndInTx(t *testing.T) {
+func TestStateRepository_PostgresNarrowAndConcurrentOCC(t *testing.T) {
 	pool := setupPool(t)
 	ctx := context.Background()
 
@@ -277,6 +335,48 @@ func TestStateRepository_PostgresNarrowInReadTxAndInTx(t *testing.T) {
 		t.Fatalf("Handle update: %v", err)
 	}
 
+	// Concurrent OCC contention storm across 5 goroutines on the SQL StateRepository.
+	bus, err := command.NewBus(command.WithMiddleware(
+		command.ObservabilityMiddleware(),
+		command.RetryMiddleware(command.RetryConfig{
+			MaxAttempts: 20,
+			BaseBackoff: 2 * time.Millisecond,
+			MaxBackoff:  25 * time.Millisecond,
+			RetryIf:     postgres.IsConcurrencyConflict,
+		}),
+	))
+	if err != nil {
+		t.Fatalf("NewBus: %v", err)
+	}
+	command.MustRegister(bus, persistence.MustNewCommandHandler(
+		persistence.FromStateRepository(&pgStateRepo{db: pool}, accountDecider()),
+		func(c creditCmd) string { return c.id },
+		func(_ accountState, c creditCmd) ([]any, error) {
+			return []any{accountCredited{Amount: c.amount}}, nil
+		},
+	))
+
+	const workers = 5
+	errs := make(chan error, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- bus.Dispatch(ctx, creditCmd{id: id, amount: 10})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for wErr := range errs {
+		if wErr != nil {
+			t.Fatalf("state repo worker failed: %v", wErr)
+		}
+	}
+
 	var (
 		bal int
 		ver int64
@@ -284,7 +384,7 @@ func TestStateRepository_PostgresNarrowInReadTxAndInTx(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT balance, version FROM state_accounts WHERE account_id = $1`, id).Scan(&bal, &ver); err != nil {
 		t.Fatalf("query state_accounts: %v", err)
 	}
-	if bal != 100 || ver != 2 {
-		t.Fatalf("state_accounts = (bal=%d, ver=%d), want (100, 2)", bal, ver)
+	if bal != 150 || ver != 7 {
+		t.Fatalf("state_accounts = (bal=%d, ver=%d), want (150, 7)", bal, ver)
 	}
 }

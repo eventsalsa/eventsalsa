@@ -15,9 +15,11 @@ import (
 	"eventsalsa.dev/store"
 )
 
-// EventRepositoryConfig configures a PostgreSQL EventRepository backed by eventsalsa.dev/store.
+// EventRepositoryConfig configures a narrow-transaction PostgreSQL EventRepository backed by
+// eventsalsa.dev/store. Each Load and Append call starts and closes its own transaction via DB
+// and rejects calls made inside an active context transaction (ErrTxAlreadyActive).
 type EventRepositoryConfig[E any] struct {
-	// DB starts narrow pgx.ReadOnly and write transactions when no outer transaction is active in ctx.
+	// DB starts narrow pgx.ReadOnly and write transactions for Load and Append. Required.
 	DB TxBeginner
 
 	// EventStore appends domain events atomically (for example *store/postgres.Store).
@@ -45,10 +47,36 @@ type EventRepositoryConfig[E any] struct {
 	BatchProjections []BatchProjection
 }
 
-// EventRepository implements eventsalsa.dev/cqrs/persistence.EventRepository[E] over PostgreSQL
-// using narrow read/write transactions by default while honoring any active context transaction.
-type EventRepository[E any] struct {
-	db               TxBeginner
+// TxEventRepositoryConfig configures a context-transaction TxEventRepository for use with
+// wide transaction middleware (NewTxMiddleware) or AdoptTx. It never starts, commits, or rolls
+// back transactions on its own and returns ErrMissingTx when no active transaction is in ctx.
+type TxEventRepositoryConfig[E any] struct {
+	// EventStore appends domain events atomically (for example *store/postgres.Store).
+	EventStore store.EventStore
+
+	// Reader loads event streams. When omitted (nil), EventStore must also implement store.StreamReader.
+	Reader store.StreamReader
+
+	// Codec translates between domain events E and store.Event / store.PersistedEvent.
+	Codec EventCodec[E]
+
+	// Clock overrides time.Now when filling zero store.Event.CreatedAt timestamps.
+	Clock func() time.Time
+
+	// IDGen overrides uuid.New when filling nil store.Event.EventID identifiers.
+	IDGen func() uuid.UUID
+
+	// StreamType identifies the aggregate stream partition stored in events.stream_type.
+	StreamType string
+
+	// Projections execute synchronously inside the active transaction for each persisted event.
+	Projections []Projection
+
+	// BatchProjections execute synchronously inside the active transaction for each appended batch.
+	BatchProjections []BatchProjection
+}
+
+type eventRepoCore[E any] struct {
 	eventStore       store.EventStore
 	reader           store.StreamReader
 	codec            EventCodec[E]
@@ -59,11 +87,7 @@ type EventRepository[E any] struct {
 	batchProjections []BatchProjection
 }
 
-// NewEventRepository validates cfg and returns a configured EventRepository[E].
-func NewEventRepository[E any](cfg EventRepositoryConfig[E]) (*EventRepository[E], error) { //nolint:gocritic // hugeParam: value config simplifies caller literals
-	if isNilValue(cfg.DB) {
-		return nil, ErrNilDB
-	}
+func newEventRepoCore[E any](cfg TxEventRepositoryConfig[E]) (*eventRepoCore[E], error) { //nolint:gocritic // hugeParam: internal builder
 	if isNilValue(cfg.EventStore) {
 		return nil, ErrNilEventStore
 	}
@@ -90,16 +114,15 @@ func NewEventRepository[E any](cfg EventRepositoryConfig[E]) (*EventRepository[E
 		idGen = uuid.New
 	}
 
-	return &EventRepository[E]{
-		db:               cfg.DB,
+	return &eventRepoCore[E]{
 		eventStore:       cfg.EventStore,
 		reader:           reader,
-		streamType:       cfg.StreamType,
 		codec:            cfg.Codec,
-		projections:      slices.Clone(cfg.Projections),
-		batchProjections: slices.Clone(cfg.BatchProjections),
 		clock:            clock,
 		idGen:            idGen,
+		streamType:       cfg.StreamType,
+		projections:      slices.Clone(cfg.Projections),
+		batchProjections: slices.Clone(cfg.BatchProjections),
 	}, nil
 }
 
@@ -127,10 +150,44 @@ func validateCodec[E any](codec EventCodec[E]) error {
 	return nil
 }
 
-// Load reads and decodes the persisted event stream for id.
+// EventRepository implements eventsalsa.dev/cqrs/persistence.EventRepository[E] using
+// dedicated narrow PostgreSQL transactions for Load (pgx.ReadOnly) and Append (read-write).
 //
-// When no active pgx.Tx is in ctx, Load runs inside a short pgx.ReadOnly transaction that
-// closes before returning so domain decision logic executes with no DB lock held.
+// Calling Load or Append when a transaction is already active in ctx fails with
+// ErrTxAlreadyActive. For explicit wide-transaction composition, use LoadTx / AppendTx or
+// construct a TxEventRepository via NewTxEventRepository.
+type EventRepository[E any] struct {
+	db   TxBeginner
+	core *eventRepoCore[E]
+}
+
+// NewEventRepository validates cfg and returns a narrow-transaction EventRepository[E].
+func NewEventRepository[E any](cfg EventRepositoryConfig[E]) (*EventRepository[E], error) { //nolint:gocritic // hugeParam: value config simplifies caller literals
+	if isNilValue(cfg.DB) {
+		return nil, ErrNilDB
+	}
+	core, err := newEventRepoCore(TxEventRepositoryConfig[E]{
+		EventStore:       cfg.EventStore,
+		Reader:           cfg.Reader,
+		Codec:            cfg.Codec,
+		Clock:            cfg.Clock,
+		IDGen:            cfg.IDGen,
+		StreamType:       cfg.StreamType,
+		Projections:      cfg.Projections,
+		BatchProjections: cfg.BatchProjections,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &EventRepository[E]{
+		db:   cfg.DB,
+		core: core,
+	}, nil
+}
+
+// Load reads and decodes the persisted event stream for id inside a short pgx.ReadOnly
+// transaction that commits and releases the connection before returning. Returns
+// ErrTxAlreadyActive if ctx already carries an active transaction.
 func (r *EventRepository[E]) Load(
 	ctx context.Context,
 	id string,
@@ -144,7 +201,7 @@ func (r *EventRepository[E]) Load(
 
 	err = InReadTx(ctx, r.db, func(txCtx context.Context, tx pgx.Tx) error {
 		var readErr error
-		events, version, readErr = r.readEventsInTx(txCtx, tx, id)
+		events, version, readErr = r.core.loadTx(txCtx, tx, id)
 		return readErr
 	})
 	if err != nil {
@@ -154,11 +211,14 @@ func (r *EventRepository[E]) Load(
 }
 
 // Append encodes domain events, stamps missing stream metadata and cqrs observability fields,
-// appends optimistically at expectedVersion, and runs inline projections inside a short write
-// transaction (or reuses the active context transaction if present).
+// and appends optimistically at expectedVersion plus inline projections inside a short write
+// transaction. Returns ErrTxAlreadyActive if ctx already carries an active transaction.
 func (r *EventRepository[E]) Append(ctx context.Context, id string, expectedVersion int64, events []E) error {
 	if ctx == nil {
 		return persistence.ErrNilContext
+	}
+	if _, ok := TxFromContext(ctx); ok {
+		return ErrTxAlreadyActive
 	}
 	if strings.TrimSpace(id) == "" {
 		return persistence.ErrEmptyTargetID
@@ -170,22 +230,111 @@ func (r *EventRepository[E]) Append(ctx context.Context, id string, expectedVers
 		return nil
 	}
 
-	storeEvents, err := r.encodeEvents(ctx, id, events)
+	storeEvents, err := r.core.encodeEvents(ctx, id, events)
 	if err != nil {
 		return err
 	}
 
 	return InTx(ctx, r.db, func(txCtx context.Context, tx pgx.Tx) error {
-		return r.appendAndProjectInTx(txCtx, tx, expectedVersion, storeEvents)
+		return r.core.appendEncodedInTx(txCtx, tx, expectedVersion, storeEvents)
 	})
 }
 
-func (r *EventRepository[E]) readEventsInTx(
+// LoadTx reads and decodes the persisted event stream for id using caller-managed tx.
+func (r *EventRepository[E]) LoadTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	id string,
 ) (events []E, version int64, err error) {
-	stream, err := r.reader.ReadStream(ctx, tx, r.streamType, id, nil, nil)
+	return r.core.loadTx(ctx, tx, id)
+}
+
+// AppendTx encodes domain events and appends them with inline projections using caller-managed tx.
+func (r *EventRepository[E]) AppendTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+	expectedVersion int64,
+	events []E,
+) error {
+	return r.core.appendTx(ctx, tx, id, expectedVersion, events)
+}
+
+// TxEventRepository implements eventsalsa.dev/cqrs/persistence.EventRepository[E] using an
+// active transaction required from context (started via NewTxMiddleware or AdoptTx). It never
+// opens, commits, or rolls back transactions and returns ErrMissingTx when no transaction is
+// active in ctx.
+type TxEventRepository[E any] struct {
+	core *eventRepoCore[E]
+}
+
+// NewTxEventRepository validates cfg and returns a context-transaction TxEventRepository[E].
+func NewTxEventRepository[E any](cfg TxEventRepositoryConfig[E]) (*TxEventRepository[E], error) { //nolint:gocritic // hugeParam: value config simplifies caller literals
+	core, err := newEventRepoCore(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &TxEventRepository[E]{core: core}, nil
+}
+
+// Load retrieves the active transaction from ctx via RequireTx and loads the stream for id.
+func (r *TxEventRepository[E]) Load(
+	ctx context.Context,
+	id string,
+) (events []E, version int64, err error) {
+	tx, err := RequireTx(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return r.core.loadTx(ctx, tx, id)
+}
+
+// Append retrieves the active transaction from ctx via RequireTx and appends events with
+// inline projections inside that transaction.
+func (r *TxEventRepository[E]) Append(ctx context.Context, id string, expectedVersion int64, events []E) error {
+	tx, err := RequireTx(ctx)
+	if err != nil {
+		return err
+	}
+	return r.core.appendTx(ctx, tx, id, expectedVersion, events)
+}
+
+// LoadTx reads and decodes the persisted event stream for id using caller-managed tx.
+func (r *TxEventRepository[E]) LoadTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+) (events []E, version int64, err error) {
+	return r.core.loadTx(ctx, tx, id)
+}
+
+// AppendTx encodes domain events and appends them with inline projections using caller-managed tx.
+func (r *TxEventRepository[E]) AppendTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+	expectedVersion int64,
+	events []E,
+) error {
+	return r.core.appendTx(ctx, tx, id, expectedVersion, events)
+}
+
+func (c *eventRepoCore[E]) loadTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+) (events []E, version int64, err error) {
+	if ctx == nil {
+		return nil, 0, persistence.ErrNilContext
+	}
+	if isNilValue(tx) {
+		return nil, 0, ErrNilTx
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, 0, persistence.ErrEmptyTargetID
+	}
+
+	stream, err := c.reader.ReadStream(ctx, tx, c.streamType, id, nil, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -194,7 +343,7 @@ func (r *EventRepository[E]) readEventsInTx(
 	}
 	decoded := make([]E, len(stream.Events))
 	for i := range stream.Events {
-		ev, decErr := r.codec.Decode(ctx, stream.Events[i])
+		ev, decErr := c.codec.Decode(ctx, stream.Events[i])
 		if decErr != nil {
 			return nil, 0, decErr
 		}
@@ -203,17 +352,47 @@ func (r *EventRepository[E]) readEventsInTx(
 	return decoded, stream.Version(), nil
 }
 
-func (r *EventRepository[E]) encodeEvents(ctx context.Context, id string, events []E) ([]store.Event, error) {
+func (c *eventRepoCore[E]) appendTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+	expectedVersion int64,
+	events []E,
+) error {
+	if ctx == nil {
+		return persistence.ErrNilContext
+	}
+	if isNilValue(tx) {
+		return ErrNilTx
+	}
+	if strings.TrimSpace(id) == "" {
+		return persistence.ErrEmptyTargetID
+	}
+	if expectedVersion < 0 {
+		return persistence.ErrInvalidVersion
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	storeEvents, err := c.encodeEvents(ctx, id, events)
+	if err != nil {
+		return err
+	}
+	return c.appendEncodedInTx(ctx, tx, expectedVersion, storeEvents)
+}
+
+func (c *eventRepoCore[E]) encodeEvents(ctx context.Context, id string, events []E) ([]store.Event, error) {
 	obs, _ := cqrs.ObservabilityFromContext(ctx)
 	causationID := firstNonEmpty(obs.CommandID, obs.CausationID)
 
 	encoded := make([]store.Event, len(events))
 	for i := range events {
-		se, err := r.codec.Encode(ctx, r.streamType, id, events[i])
+		se, err := c.codec.Encode(ctx, c.streamType, id, events[i])
 		if err != nil {
 			return nil, err
 		}
-		if err := r.normalizeEvent(&se, id, obs.TraceID, causationID); err != nil {
+		if err := c.normalizeEvent(&se, id, obs.TraceID, causationID); err != nil {
 			return nil, err
 		}
 		encoded[i] = se
@@ -221,15 +400,15 @@ func (r *EventRepository[E]) encodeEvents(ctx context.Context, id string, events
 	return encoded, nil
 }
 
-func (r *EventRepository[E]) normalizeEvent(
+func (c *eventRepoCore[E]) normalizeEvent(
 	se *store.Event,
 	id string,
 	traceID string,
 	causationID string,
 ) error {
 	if se.StreamType == "" {
-		se.StreamType = r.streamType
-	} else if se.StreamType != r.streamType {
+		se.StreamType = c.streamType
+	} else if se.StreamType != c.streamType {
 		return ErrStreamMismatch
 	}
 	if se.StreamID == "" {
@@ -237,14 +416,17 @@ func (r *EventRepository[E]) normalizeEvent(
 	} else if se.StreamID != id {
 		return ErrStreamMismatch
 	}
+	if strings.TrimSpace(se.EventType) == "" {
+		return ErrEmptyEventType
+	}
 	if se.EventID == uuid.Nil {
-		se.EventID = r.idGen()
+		se.EventID = c.idGen()
 	}
 	if se.EventVersion <= 0 {
 		se.EventVersion = 1
 	}
 	if se.CreatedAt.IsZero() {
-		se.CreatedAt = r.clock()
+		se.CreatedAt = c.clock()
 	}
 	if !se.TraceID.Valid && traceID != "" {
 		se.TraceID = store.NullString{String: traceID, Valid: true}
@@ -255,13 +437,13 @@ func (r *EventRepository[E]) normalizeEvent(
 	return nil
 }
 
-func (r *EventRepository[E]) appendAndProjectInTx(
+func (c *eventRepoCore[E]) appendEncodedInTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	expectedVersion int64,
 	storeEvents []store.Event,
 ) error {
-	res, err := r.eventStore.Append(ctx, tx, store.Exact(expectedVersion), storeEvents)
+	res, err := c.eventStore.Append(ctx, tx, store.Exact(expectedVersion), storeEvents)
 	if err != nil {
 		if errors.Is(err, store.ErrOptimisticConcurrency) {
 			return wrapConcurrencyConflict(err)
@@ -269,19 +451,19 @@ func (r *EventRepository[E]) appendAndProjectInTx(
 		return err
 	}
 
-	return r.runProjections(ctx, tx, res.Events)
+	return c.runProjections(ctx, tx, res.Events)
 }
 
-func (r *EventRepository[E]) runProjections(ctx context.Context, tx pgx.Tx, persisted []store.PersistedEvent) error {
+func (c *eventRepoCore[E]) runProjections(ctx context.Context, tx pgx.Tx, persisted []store.PersistedEvent) error {
 	if len(persisted) == 0 {
 		return nil
 	}
-	for _, bp := range r.batchProjections {
+	for _, bp := range c.batchProjections {
 		if err := bp.Handle(ctx, tx, persisted); err != nil {
 			return err
 		}
 	}
-	for _, p := range r.projections {
+	for _, p := range c.projections {
 		for i := range persisted {
 			if err := p.Handle(ctx, tx, persisted[i]); err != nil {
 				return err

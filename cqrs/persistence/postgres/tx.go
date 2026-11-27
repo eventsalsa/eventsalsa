@@ -91,8 +91,22 @@ func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
 	return tx, true
 }
 
-// InTx executes fn inside ctx's active transaction if present, or begins and manages a new
-// read-write transaction on db for the duration of fn.
+// RequireTx retrieves the active transaction carried by ctx or returns ErrMissingTx if none
+// is active (returning persistence.ErrNilContext when ctx is nil).
+func RequireTx(ctx context.Context) (pgx.Tx, error) {
+	if ctx == nil {
+		return nil, persistence.ErrNilContext
+	}
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return nil, ErrMissingTx
+	}
+	return tx, nil
+}
+
+// InTx starts and manages a new read-write transaction on db for the duration of fn.
+// It is strictly non-reentrant and returns ErrTxAlreadyActive if ctx already carries an
+// active transaction.
 func InTx(
 	ctx context.Context,
 	db TxBeginner,
@@ -102,8 +116,9 @@ func InTx(
 	return runScopedTx(ctx, db, false, fn, opts...)
 }
 
-// InReadTx executes fn inside ctx's active transaction if present, or begins and manages a
-// short pgx.ReadOnly transaction on db for the duration of fn.
+// InReadTx starts and manages a short pgx.ReadOnly transaction on db for the duration of fn.
+// It is strictly non-reentrant and returns ErrTxAlreadyActive if ctx already carries an
+// active transaction.
 func InReadTx(
 	ctx context.Context,
 	db TxBeginner,
@@ -126,11 +141,11 @@ func runScopedTx(
 	if fn == nil {
 		return ErrNilFunc
 	}
-	if tx, ok := TxFromContext(ctx); ok {
-		return fn(ctx, tx)
-	}
 	if isNilValue(db) {
 		return ErrNilDB
+	}
+	if _, ok := TxFromContext(ctx); ok {
+		return ErrTxAlreadyActive
 	}
 	cfg := buildTxConfig(readOnly, opts)
 	return beginAndRunTx(ctx, db, cfg.txOptions, cfg.rollbackTimeout, fn)
@@ -220,6 +235,9 @@ func beginAndRunTx(
 	if err != nil {
 		return err
 	}
+	if isNilValue(tx) {
+		return ErrNilTx
+	}
 	txCtx, adoptErr := AdoptTx(ctx, tx)
 	if adoptErr != nil {
 		return errors.Join(adoptErr, rollbackTx(ctx, tx, rollbackTimeout))
@@ -259,6 +277,9 @@ func executeWithTx(
 }
 
 func rollbackTx(ctx context.Context, tx pgx.Tx, timeout time.Duration) error {
+	if isNilValue(tx) {
+		return nil
+	}
 	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	if err := tx.Rollback(rbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {

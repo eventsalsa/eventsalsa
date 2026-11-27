@@ -19,6 +19,9 @@ func (h *GetOrderOverviewHandler) Handle(
 	ctx context.Context,
 	q *pbqueries.GetOrderOverview,
 ) (*pbqueries.OrderOverview, error) {
+	if h == nil || h.DB == nil {
+		return nil, ErrMissingDB
+	}
 	if q == nil {
 		return nil, ErrEmptyQuery
 	}

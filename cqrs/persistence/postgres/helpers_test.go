@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,14 +18,16 @@ import (
 
 type spyTx struct {
 	pgx.Tx
-	db             *spyDB
-	id             int
-	accessMode     pgx.TxAccessMode
-	committed      bool
-	rolledBack     bool
-	rollbackCtxErr error
-	commitErr      error
-	rollbackErr    error
+	db                  *spyDB
+	id                  int
+	txOpts              pgx.TxOptions
+	committed           bool
+	rolledBack          bool
+	rollbackCtxErr      error
+	rollbackDeadline    time.Time
+	hasRollbackDeadline bool
+	commitErr           error
+	rollbackErr         error
 }
 
 func (tx *spyTx) Commit(_ context.Context) error {
@@ -41,6 +44,7 @@ func (tx *spyTx) Commit(_ context.Context) error {
 
 func (tx *spyTx) Rollback(ctx context.Context) error {
 	tx.rollbackCtxErr = ctx.Err()
+	tx.rollbackDeadline, tx.hasRollbackDeadline = ctx.Deadline()
 	tx.db.recordTimeline(tx.label() + ":rollback")
 	if tx.rollbackErr != nil {
 		return tx.rollbackErr
@@ -53,7 +57,7 @@ func (tx *spyTx) Rollback(ctx context.Context) error {
 }
 
 func (tx *spyTx) label() string {
-	if tx.accessMode == pgx.ReadOnly {
+	if tx.txOpts.AccessMode == pgx.ReadOnly {
 		return "read_tx"
 	}
 	return "write_tx"
@@ -62,6 +66,8 @@ func (tx *spyTx) label() string {
 type spyDB struct {
 	mu           sync.Mutex
 	beginErr     error
+	returnNilTx  bool
+	typedNilTx   bool
 	nextCommit   error
 	nextRollback error
 	txs          []*spyTx
@@ -75,10 +81,18 @@ func (db *spyDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) 
 	if db.beginErr != nil {
 		return nil, db.beginErr
 	}
+	if db.returnNilTx {
+		return nil, nil
+	}
+	if db.typedNilTx {
+		var nilSpy *spyTx
+		return nilSpy, nil
+	}
+
 	tx := &spyTx{
 		db:          db,
 		id:          len(db.txs) + 1,
-		accessMode:  opts.AccessMode,
+		txOpts:      opts,
 		commitErr:   db.nextCommit,
 		rollbackErr: db.nextRollback,
 	}

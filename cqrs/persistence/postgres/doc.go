@@ -1,17 +1,17 @@
-// Package postgres provides PostgreSQL-native transaction scoping, EventRepository
-// wiring over eventsalsa.dev/store, inline projection hooks, event mapping helpers, and
-// causal event bridging for eventsalsa.dev/cqrs/persistence.
+// Package postgres provides PostgreSQL-native transaction scoping, EventRepository and
+// TxEventRepository wiring over eventsalsa.dev/store, inline projection hooks, event mapping
+// helpers, and causal event bridging for eventsalsa.dev/cqrs/persistence.
 //
-// Transaction model (narrow by default, wide by composition):
-//   - EventRepository.Load and InReadTx run inside a short pgx.ReadOnly transaction that
-//     closes before domain decision logic executes, avoiding held locks or open write
-//     transactions during decide(state, cmd).
-//   - EventRepository.Append and InTx open a short read-write transaction strictly around
-//     database mutations (store.EventStore.Append plus inline projections, or StateRepository
-//     Save) and commit immediately.
-//   - When multi-stream atomicity or cross-step read-your-writes isolation is needed, mount
-//     NewTxMiddleware / MustTxMiddleware on command.Bus (or wrap ctx via AdoptTx). Both
-//     InReadTx and InTx automatically detect and reuse an active context transaction.
-//   - Transaction starters (NewTxMiddleware, NewQueryTxMiddleware, AdoptTx) are strictly
-//     non-reentrant and fail with ErrTxAlreadyActive if nested.
+// Explicit transaction ownership (no silent transaction inheritance):
+//   - Every transaction starter (InReadTx, InTx, NewTxMiddleware, NewQueryTxMiddleware,
+//     AdoptTx) is strictly non-reentrant and fails immediately with ErrTxAlreadyActive if a
+//     transaction is already active in context.Context.
+//   - Narrow by default: EventRepository (NewEventRepository) owns its own short pgx.ReadOnly
+//     transaction on Load and short read-write transaction on Append, releasing read locks
+//     before domain decision logic runs. Calling narrow Load/Append inside an active context
+//     transaction fails loudly with ErrTxAlreadyActive.
+//   - Wide by composition: mount NewTxMiddleware / MustTxMiddleware (or AdoptTx) when multi-
+//     stream or SQL+stream atomicity is needed, and pair it either with NewTxEventRepository
+//     (which uses RequireTx and returns ErrMissingTx if absent) or explicit LoadTx / AppendTx
+//     calls with caller-managed pgx.Tx.
 package postgres

@@ -10,11 +10,14 @@ import (
 )
 
 // ContextWithEventCausation returns a child context carrying trace and causal identity
-// from pe so downstream command dispatches (e.g. from eventsalsa.dev/projector handlers)
-// link TraceID and CausationID to the triggering event without overwriting an outer trace.
+// from pe so downstream command dispatches (for example from eventsalsa.dev/projector
+// handlers) re-enter pe's causal chain cleanly.
 //
-// Any prior CommandID on ctx is cleared so command.ObservabilityMiddleware promotes
-// pe.EventID directly into the downstream command's CausationID.
+// It sets TraceID from pe.TraceID when valid and non-empty (falling back to ctx's
+// existing TraceID otherwise) and sets CausationID from pe.EventID (falling back to
+// pe.CausationID when EventID is nil). Any prior CommandID on ctx is cleared so
+// command.ObservabilityMiddleware promotes pe.EventID directly into the downstream
+// command's CausationID.
 //
 //nolint:gocritic // hugeParam: matches store.PersistedEvent value contract
 func ContextWithEventCausation(ctx context.Context, pe store.PersistedEvent) context.Context {
