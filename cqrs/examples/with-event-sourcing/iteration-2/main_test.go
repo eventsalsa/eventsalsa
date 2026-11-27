@@ -15,6 +15,7 @@ import (
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/internal/infra/queries"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-2/queries"
 	"eventsalsa.dev/cqrs/query"
+	"eventsalsa.dev/store"
 )
 
 type stubOrderRepository struct {
@@ -88,6 +89,14 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 		t.Fatalf("registerCommandHandlers: %v", regErr)
 	}
 
+	// Non-positive total, duplicate PlaceOrder, and unknown ConfirmOrder are classified as rejections.
+	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
+		OrderId:    "ord-invalid",
+		CustomerId: "cust-42",
+		TotalCents: 0,
+	}); dispatchErr != nil {
+		t.Fatalf("invalid PlaceOrder should mask rejection, got: %v", dispatchErr)
+	}
 	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
 		OrderId:    "ord-1",
 		CustomerId: "cust-42",
@@ -95,8 +104,6 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 	}); dispatchErr != nil {
 		t.Fatalf("PlaceOrder: %v", dispatchErr)
 	}
-
-	// Duplicate PlaceOrder and unknown ConfirmOrder are classified as domain rejections.
 	if dispatchErr := bus.Dispatch(ctx, &commands.PlaceOrder{
 		OrderId:    "ord-1",
 		CustomerId: "cust-42",
@@ -107,10 +114,6 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 	if dispatchErr := bus.Dispatch(ctx, &commands.ConfirmOrder{OrderId: "missing"}); dispatchErr != nil {
 		t.Fatalf("missing ConfirmOrder should mask rejection, got: %v", dispatchErr)
 	}
-	if len(rejected) != 2 || !errors.Is(rejected[0], domain.ErrAlreadyPlaced) || !errors.Is(rejected[1], domain.ErrOrderNotFound) {
-		t.Fatalf("rejected = %v, want [ErrAlreadyPlaced, ErrOrderNotFound]", rejected)
-	}
-
 	if dispatchErr := bus.Dispatch(ctx, &commands.ConfirmOrder{OrderId: "ord-1"}); dispatchErr != nil {
 		t.Fatalf("ConfirmOrder: %v", dispatchErr)
 	}
@@ -119,13 +122,29 @@ func TestIteration2ACLAndDomainFlow(t *testing.T) {
 		t.Fatalf("idempotent ConfirmOrder: %v", dispatchErr)
 	}
 
+	if len(rejected) != 3 ||
+		!errors.Is(rejected[0], domain.ErrInvalidAmount) ||
+		!errors.Is(rejected[1], domain.ErrAlreadyPlaced) ||
+		!errors.Is(rejected[2], domain.ErrOrderNotFound) {
+		t.Fatalf("rejected = %v, want [ErrInvalidAmount, ErrAlreadyPlaced, ErrOrderNotFound]", rejected)
+	}
+	if !command.IsRejected(classifyDomainError(acl.ErrEmptyCommand)) {
+		t.Fatal("ErrEmptyCommand must be classified as rejection")
+	}
+	if command.IsRejected(classifyDomainError(store.ErrOptimisticConcurrency)) {
+		t.Fatal("store optimistic concurrency fault must not be classified as rejection")
+	}
+
 	reloaded, loadErr := repo.Load(ctx, "ord-1")
 	if loadErr != nil {
 		t.Fatalf("repo.Load: %v", loadErr)
 	}
-	if !reloaded.Placed || !reloaded.Confirmed || reloaded.Version() != 2 {
-		t.Fatalf("unexpected reloaded order: placed=%v confirmed=%v version=%d",
-			reloaded.Placed, reloaded.Confirmed, reloaded.Version())
+	if !reloaded.Placed ||
+		!reloaded.Confirmed ||
+		reloaded.CustomerID != "cust-42" ||
+		reloaded.TotalCents != 2500 ||
+		reloaded.Version() != 2 {
+		t.Fatalf("unexpected reloaded order: %+v version=%d", reloaded, reloaded.Version())
 	}
 }
 

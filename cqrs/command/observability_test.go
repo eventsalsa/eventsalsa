@@ -109,4 +109,15 @@ func TestObservabilityMiddleware_CustomGeneratorAndFallback(t *testing.T) {
 	if got.CommandID == "" {
 		t.Fatal("expected UUID fallback when custom generator returned empty string")
 	}
+
+	// Pre-seeded CausationID is preserved when parent CommandID is absent.
+	seedCause := cqrs.WithObservability(context.Background(), cqrs.Observability{
+		CausationID: "external-cause-99",
+	})
+	if handleErr := h.Handle(seedCause, ping{}); handleErr != nil {
+		t.Fatalf("Handle with seeded causation: %v", handleErr)
+	}
+	if got.CausationID != "external-cause-99" || got.TraceID == "" || got.CommandID == "" {
+		t.Fatalf("unexpected seeded causation observability: %+v", got)
+	}
 }

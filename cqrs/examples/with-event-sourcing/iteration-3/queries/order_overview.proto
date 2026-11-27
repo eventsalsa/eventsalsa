@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package orders.es.v3.queries.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-3/queries;queries";
+
+// OrderOverview is a projected read DTO queried independently of aggregate streams.
+message OrderOverview {
+  string order_id = 1;
+  string customer_id = 2;
+  string status = 3;
+  int64 total_cents = 4;
+  int64 version = 5;
+}

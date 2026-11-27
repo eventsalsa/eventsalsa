@@ -97,21 +97,82 @@ func TestRetryMiddleware_SuccessAndRetries(t *testing.T) {
 	t.Run("nil RetryIf and <=1 MaxAttempts never retry", func(t *testing.T) {
 		t.Parallel()
 
+		for _, tc := range []struct {
+			name string
+			cfg  command.RetryConfig
+		}{
+			{
+				name: "nil RetryIf",
+				cfg:  command.RetryConfig{MaxAttempts: 5, RetryIf: nil},
+			},
+			{
+				name: "MaxAttempts zero with RetryIf",
+				cfg:  command.RetryConfig{MaxAttempts: 0, RetryIf: func(error) bool { return true }},
+			},
+			{
+				name: "MaxAttempts negative with RetryIf",
+				cfg:  command.RetryConfig{MaxAttempts: -2, RetryIf: func(error) bool { return true }},
+			},
+			{
+				name: "MaxAttempts one with RetryIf",
+				cfg:  command.RetryConfig{MaxAttempts: 1, RetryIf: func(error) bool { return true }},
+			},
+		} {
+			attempts := 0
+			h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
+				attempts++
+				return errTransient
+			}), command.RetryMiddleware(tc.cfg))
+			if err != nil {
+				t.Fatalf("%s Wrap: %v", tc.name, err)
+			}
+
+			runErr := h.Handle(context.Background(), workCmd{})
+			if !errors.Is(runErr, errTransient) || attempts != 1 {
+				t.Fatalf("%s: got err=%v attempts=%d, want errTransient and 1 attempt", tc.name, runErr, attempts)
+			}
+		}
+	})
+
+	t.Run("backoff defaults, MaxBackoff<BaseBackoff clamping, and high attempt shift", func(t *testing.T) {
+		t.Parallel()
+
 		attempts := 0
-		h, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
+		hDefault, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
 			attempts++
-			return errTransient
+			if attempts < 2 {
+				return errTransient
+			}
+			return nil
 		}), command.RetryMiddleware(command.RetryConfig{
-			MaxAttempts: 5,
-			RetryIf:     nil,
+			MaxAttempts: 2,
+			BaseBackoff: 0,
+			MaxBackoff:  0,
+			RetryIf:     func(e error) bool { return errors.Is(e, errTransient) },
 		}))
 		if err != nil {
-			t.Fatalf("Wrap: %v", err)
+			t.Fatalf("Wrap default backoff: %v", err)
+		}
+		if runErr := hDefault.Handle(context.Background(), workCmd{}); runErr != nil || attempts != 2 {
+			t.Fatalf("default backoff got err=%v attempts=%d", runErr, attempts)
 		}
 
-		runErr := h.Handle(context.Background(), workCmd{})
-		if !errors.Is(runErr, errTransient) || attempts != 1 {
-			t.Fatalf("nil RetryIf must run once, got err=%v attempts=%d", runErr, attempts)
+		// Negative/clamped bounds and >30 retries remain safe and bounded.
+		highAttempts := 0
+		hClamped, err := command.Wrap(command.Func[workCmd](func(_ context.Context, _ workCmd) error {
+			highAttempts++
+			return errTransient
+		}), command.RetryMiddleware(command.RetryConfig{
+			MaxAttempts: 33,
+			BaseBackoff: 2 * time.Microsecond,
+			MaxBackoff:  time.Nanosecond,
+			RetryIf:     func(e error) bool { return errors.Is(e, errTransient) },
+		}))
+		if err != nil {
+			t.Fatalf("Wrap high attempts: %v", err)
+		}
+		if runErr := hClamped.Handle(context.Background(), workCmd{}); !errors.Is(runErr, errTransient) || highAttempts != 33 {
+			t.Fatalf("clamped backoff got err=%v attempts=%d", runErr, highAttempts)
 		}
 	})
 }

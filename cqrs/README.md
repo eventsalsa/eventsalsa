@@ -158,9 +158,10 @@ Runnable samples live in the standalone [`examples/`](./examples/) sub-module:
 
 - **[`examples/without-event-sourcing/iteration-1`](./examples/without-event-sourcing/iteration-1/)** — CQRS without Event Sourcing: exported Go `commands`/`queries` structs, domain invariants, and `internal/application` write handlers
 - **[`examples/without-event-sourcing/iteration-2`](./examples/without-event-sourcing/iteration-2/)** — CQRS without Event Sourcing: Protobuf `commands`/`queries` contracts, `command.Func` ACL adapters in `internal/infra/acl`, internal `internal/application` commands/handlers, and `internal/domain` entity invariants
-- **[`examples/without-event-sourcing/iteration-3`](./examples/without-event-sourcing/iteration-3/)** — CQRS without Event Sourcing: Protobuf contracts, ACL adapters, generic `Decider`/`StateRepository` handler in `internal/infra/persistence`, and a pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`
+- **[`examples/without-event-sourcing/iteration-3`](./examples/without-event-sourcing/iteration-3/)** — CQRS without Event Sourcing: Protobuf contracts, ACL adapters, `eventsalsa.dev/cqrs/persistence` generic `Decider`/`FromStateRepository`/`NewCommandHandler` with state OCC, and a pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`
 - **[`examples/with-event-sourcing/iteration-1`](./examples/with-event-sourcing/iteration-1/)** — CQRS with Event Sourcing using exported Go `commands`/`queries` structs, `internal/domain` event-sourced `Order` aggregate & `OrderRepository` (`Load`/`Save`), `internal/application` handlers, and `eventmap-gen` + `eventsalsa/store` + inline projection in `internal/infra`
 - **[`examples/with-event-sourcing/iteration-2`](./examples/with-event-sourcing/iteration-2/)** — CQRS with Event Sourcing adding compiled Protobuf `commands`/`queries` contracts, `command.Func` ACL translators in `internal/infra/acl`, internal `internal/application` commands, OOP `Order` aggregate & `OrderRepository`, and separated `internal/infra/{persistence,queries}` adapters
+- **[`examples/with-event-sourcing/iteration-3`](./examples/with-event-sourcing/iteration-3/)** — CQRS with Event Sourcing replacing OOP aggregate plumbing and `internal/application` handlers with `eventsalsa.dev/cqrs/persistence` (`FromEventRepository` + `NewCommandHandler`), a pure `Initial`/`Decide`/`Evolve` Decider tested via `cqrs/spectest`, and `eventmap-gen` + `eventsalsa/store` persistence
 
 ## Package Layout
 
@@ -172,6 +173,7 @@ cqrs/
 ├── command/                # Write-side handlers, bus, middlewares, rejection boundaries
 ├── query/                  # Read-side handlers, bus, typed Execute, middlewares
 ├── spectest/               # Given/When/Then pure domain test harness
+├── persistence/            # Submodule: eventsalsa.dev/cqrs/persistence (Decider, Repositories, Adapter, NewCommandHandler)
 ├── internal/cqrsutil/      # Shared reflection guards, middleware chaining, ID helper
 ├── examples/               # Standalone unpublished runnable examples
 └── integration_test/       # In-process end-to-end CQRS pipeline integration tests

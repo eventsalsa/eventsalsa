@@ -6,7 +6,8 @@ In Iteration 1, the module exports Go command structs (`commands/`) and query/DT
 
 ```text
 iteration-1/
-├── main.go                              # Composition root (DB, buses, handler wiring, run)
+├── main.go                              # Thin entrypoint running sample commands & queries
+├── bootstrap.go                         # Composition root (DB, buses, middlewares, handler wiring)
 ├── main_test.go                         # End-to-end tests
 ├── commands/                            # Public write command contracts
 │   ├── place_order.go
@@ -18,6 +19,7 @@ iteration-1/
     ├── domain/                          # Business entity, invariants, errors, write repository port
     │   ├── errors.go
     │   ├── order.go
+    │   ├── order_test.go
     │   └── repository.go
     ├── application/                     # Write-side use case handlers (1 file per command)
     │   ├── place_order_handler.go

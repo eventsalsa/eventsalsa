@@ -13,7 +13,8 @@ Each write flows through four layers:
 ```text
 iteration-2/
 ├── generate.go                                  # //go:generate protoc directives
-├── main.go                                      # Composition root (pgxpool, store, ACL, buses, run)
+├── main.go                                      # Thin entrypoint running sample commands & queries
+├── bootstrap.go                                 # Composition root (pgxpool, store, ACL, middlewares, buses)
 ├── main_test.go                                 # End-to-end ACL/domain tests + nil-proto safety
 ├── commands/                                    # Public Protobuf command contracts
 │   ├── place_order.proto
@@ -51,7 +52,8 @@ iteration-2/
         │   ├── tx.go
         │   ├── schema.go
         │   ├── projection.go
-        │   └── order_repository.go
+        │   ├── order_repository.go
+        │   └── order_repository_test.go         # Tx guard, no-op save, and projection error tests
         └── queries/                             # Thin SQL read handler returning Protobuf views
             ├── errors.go
             └── get_order_overview_handler.go

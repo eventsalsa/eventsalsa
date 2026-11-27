@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/commands"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/application"
 	"eventsalsa.dev/cqrs/examples/without-event-sourcing/iteration-2/internal/domain"
@@ -22,13 +23,36 @@ func TestIteration2Example(t *testing.T) {
 	ctx := cqrs.WithTraceID(context.Background(), "test-trace")
 	db := persistence.NewMemoryDB()
 
-	cmdBus, err := newCommandBus(db)
+	var rejected []error
+	cmdBus, err := newCommandBus(db, command.WithOnRejected(func(_ context.Context, _ any, rejErr error) {
+		rejected = append(rejected, rejErr)
+	}))
 	if err != nil {
 		t.Fatalf("newCommandBus: %v", err)
 	}
 	qBus, err := newQueryBus(db)
 	if err != nil {
 		t.Fatalf("newQueryBus: %v", err)
+	}
+
+	// Non-positive order total is classified as a rejection; unknown order misses fail unmasked.
+	if err := cmdBus.Dispatch(ctx, &commands.PlaceOrder{
+		OrderId:    "ord-invalid",
+		CustomerId: "cust-42",
+		TotalCents: -10,
+	}); err != nil {
+		t.Fatalf("invalid PlaceOrder should be masked rejection, got: %v", err)
+	}
+	if err := cmdBus.Dispatch(ctx, &commands.CancelOrder{
+		OrderId: "missing",
+		Reason:  "unknown",
+	}); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("missing CancelOrder err = %v, want %v", err, domain.ErrOrderNotFound)
+	}
+	if _, err := query.Execute[*queries.OrderSummary](ctx, qBus, &queries.GetOrderSummary{OrderId: "missing"}); !errors.Is(
+		err, domain.ErrOrderNotFound,
+	) {
+		t.Fatalf("missing GetOrderSummary err = %v, want %v", err, domain.ErrOrderNotFound)
 	}
 
 	if err := cmdBus.Dispatch(ctx, &commands.PlaceOrder{
@@ -66,6 +90,12 @@ func TestIteration2Example(t *testing.T) {
 	}
 	if err := cmdBus.Dispatch(ctx, &commands.CancelOrder{OrderId: "ord-1", Reason: "duplicate"}); err != nil {
 		t.Fatalf("duplicate CancelOrder should be masked rejection, got: %v", err)
+	}
+	if len(rejected) != 3 ||
+		!errors.Is(rejected[0], domain.ErrInvalidOrderTotal) ||
+		!errors.Is(rejected[1], domain.ErrCancellationReasonRequired) ||
+		!errors.Is(rejected[2], domain.ErrAlreadyCanceled) {
+		t.Fatalf("rejected = %v, want [ErrInvalidOrderTotal, ErrCancellationReasonRequired, ErrAlreadyCanceled]", rejected)
 	}
 
 	canceled, err := query.Execute[*queries.OrderSummary](ctx, qBus, &queries.GetOrderSummary{OrderId: "ord-1"})
