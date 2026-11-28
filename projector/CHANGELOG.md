@@ -2,6 +2,13 @@
 
 > **Monorepo Cutover (`v0.6.0`+):** After `v0.5.0`, `projector` moved from `github.com/eventsalsa/projector` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/projector`. Historical entries below are preserved from the original repository.
 
+## [0.7.1](https://github.com/eventsalsa/eventsalsa/compare/projector/v0.7.0...projector/v0.7.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** bump the projector-dependencies group ([#25](https://github.com/eventsalsa/eventsalsa/issues/25)) ([37590bd](https://github.com/eventsalsa/eventsalsa/commit/37590bd3eccb43cec009b04e041558d30c27e8e8))
+
 ## [0.7.0](https://github.com/eventsalsa/eventsalsa/compare/projector/v0.6.0...projector/v0.7.0) (2026-11-19)
 
 

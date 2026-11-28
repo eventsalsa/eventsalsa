@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.2](https://github.com/eventsalsa/eventsalsa/compare/encryption/kek/awskms/v0.0.1...encryption/kek/awskms/v0.0.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** bump github.com/aws/aws-sdk-go-v2/service/kms ([#27](https://github.com/eventsalsa/eventsalsa/issues/27)) ([ef0a93e](https://github.com/eventsalsa/eventsalsa/commit/ef0a93e16eefce089c99ea68933fd793531d57d9))
+
 ## 0.0.1 (2026-11-19)
 
 
