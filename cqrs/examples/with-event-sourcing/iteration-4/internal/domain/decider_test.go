@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"testing"
 
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/domain"
@@ -99,4 +100,19 @@ func TestOrderDeciderSpecs(t *testing.T) {
 		events.OrderConfirmed{},
 	).When("ord-1", domain.ConfirmOrder{OrderID: "ord-1"}, domain.DecideConfirmOrder).
 		Then()
+
+	for _, domErr := range []error{
+		domain.ErrInvalidAmount,
+		domain.ErrAlreadyPlaced,
+		domain.ErrAlreadyConfirmed,
+		domain.ErrNotPlaced,
+		domain.ErrEmptySKU,
+	} {
+		if !domain.IsRejection(domErr) {
+			t.Fatalf("expected IsRejection(%v) == true", domErr)
+		}
+	}
+	if domain.IsRejection(errors.New("db down")) {
+		t.Fatal("unrelated error must not match domain.IsRejection")
+	}
 }

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/config"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/config"
 )
 
 func TestFromEnvAndValidation(t *testing.T) {
@@ -76,7 +76,6 @@ func TestFromEnvAndValidation(t *testing.T) {
 		}
 	}
 
-	// Out-of-bounds env value triggers Validate().
 	if _, err := config.FromEnv(func(k string) string {
 		if k == "SNAPSHOT_EVERY_N_EVENTS" {
 			return "0"

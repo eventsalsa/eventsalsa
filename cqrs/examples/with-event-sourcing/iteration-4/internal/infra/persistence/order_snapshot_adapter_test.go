@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/config"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/infra/persistence"
 	"eventsalsa.dev/cqrs/persistence/postgres"
 	"eventsalsa.dev/snapshot"
@@ -50,40 +49,35 @@ func (stubSnapshotStore) Put(context.Context, pgx.Tx, *snapshot.Snapshot) error 
 	return nil
 }
 
-func TestNewOrderAdapter(t *testing.T) {
+func TestNewOrderSnapshotAdapter(t *testing.T) {
 	t.Parallel()
 
-	snapCfg := config.Default().Snapshot
-	if _, err := persistence.NewOrderAdapter(nil); !errors.Is(err, postgres.ErrNilDB) {
-		t.Fatalf("nil params err = %v, want %v", err, postgres.ErrNilDB)
-	}
-	if _, err := persistence.NewOrderAdapter(&persistence.OrderAdapterParams{
-		EventStore: stubStoreAndReader{},
-		SnapStore:  stubSnapshotStore{},
-		Snapshot:   snapCfg,
-	}); !errors.Is(err, postgres.ErrNilDB) {
+	if _, err := persistence.NewOrderSnapshotAdapter(nil, stubStoreAndReader{}, stubSnapshotStore{}); !errors.Is(
+		err, postgres.ErrNilDB,
+	) {
 		t.Fatalf("missing DB err = %v, want %v", err, postgres.ErrNilDB)
 	}
 
-	adapter, err := persistence.NewOrderAdapter(&persistence.OrderAdapterParams{
-		DB:         stubTxBeginner{},
-		EventStore: stubStoreAndReader{},
-		SnapStore:  stubSnapshotStore{},
-		Snapshot:   snapCfg,
-	})
+	adapter, err := persistence.NewOrderSnapshotAdapter(
+		stubTxBeginner{},
+		stubStoreAndReader{},
+		stubSnapshotStore{},
+		nil,
+		persistence.WithStreamType("CustomOrder"),
+		persistence.WithSchemaVersion(2),
+		persistence.WithSnapshotPolicy(snapshot.EveryNEvents(5)),
+		persistence.WithSnapshotCompression(false),
+	)
 	if err != nil {
-		t.Fatalf("NewOrderAdapter valid err = %v", err)
+		t.Fatalf("NewOrderSnapshotAdapter with options err = %v", err)
 	}
 	_ = adapter
 
-	noCompress := snapCfg
-	noCompress.Compress = false
-	if _, err := persistence.NewOrderAdapter(&persistence.OrderAdapterParams{
-		DB:         stubTxBeginner{},
-		EventStore: stubStoreAndReader{},
-		SnapStore:  stubSnapshotStore{},
-		Snapshot:   noCompress,
-	}); err != nil {
-		t.Fatalf("NewOrderAdapter uncompressed err = %v", err)
+	if _, err := persistence.NewOrderSnapshotAdapter(
+		stubTxBeginner{},
+		stubStoreAndReader{},
+		stubSnapshotStore{},
+	); err != nil {
+		t.Fatalf("NewOrderSnapshotAdapter defaults err = %v", err)
 	}
 }

@@ -1,5 +1,5 @@
-// Package main runs Event-Sourced Iteration 4: top-level Protobuf contracts and
-// snapshotted Decider wiring (eventsalsa.dev/cqrs/persistence + eventsalsa.dev/snapshot).
+// Package main runs Event-Sourced Iteration 4: top-level Protobuf contracts,
+// exported config and bootstrap wiring, and snapshotted Decider execution.
 package main
 
 import (
@@ -10,8 +10,9 @@ import (
 	"github.com/google/uuid"
 
 	"eventsalsa.dev/cqrs"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/bootstrap"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/commands"
-	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/config"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/config"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/queries"
 	"eventsalsa.dev/cqrs/query"
 )
@@ -22,17 +23,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	app, err := openApp(ctx, cfg)
+	app, err := bootstrap.Open(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	defer app.close()
+	defer app.Close()
 
 	orderID := "ord-" + uuid.NewString()[:8]
 	reqCtx := cqrs.WithTraceID(ctx, "trace-"+uuid.NewString()[:8])
 
 	// v1: OrderPlaced
-	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.PlaceOrder{
+	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.PlaceOrder{
 		OrderId:    orderID,
 		CustomerId: "cust-42",
 		TotalCents: 10000,
@@ -40,7 +41,7 @@ func run(ctx context.Context) error {
 		return dispatchErr
 	}
 	// v2: OrderItemAdded
-	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.AddOrderItem{
+	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.AddOrderItem{
 		OrderId:   orderID,
 		Sku:       "sku-salsa",
 		UnitCents: 2500,
@@ -49,7 +50,7 @@ func run(ctx context.Context) error {
 		return dispatchErr
 	}
 	// v3: OrderItemAdded -> crosses EveryNEvents(3) and writes a compressed snapshot at v3.
-	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.AddOrderItem{
+	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.AddOrderItem{
 		OrderId:   orderID,
 		Sku:       "sku-chips",
 		UnitCents: 1900,
@@ -58,13 +59,13 @@ func run(ctx context.Context) error {
 		return dispatchErr
 	}
 	// v4: ConfirmOrder loads snapshot v3 (zero events replayed) and appends OrderConfirmed.
-	if dispatchErr := app.commands.Dispatch(reqCtx, &commands.ConfirmOrder{OrderId: orderID}); dispatchErr != nil {
+	if dispatchErr := app.Commands.Dispatch(reqCtx, &commands.ConfirmOrder{OrderId: orderID}); dispatchErr != nil {
 		return dispatchErr
 	}
 
 	view, err := query.Execute[*queries.OrderOverview](
 		reqCtx,
-		app.queries,
+		app.Queries,
 		&queries.GetOrderOverview{OrderId: orderID},
 	)
 	if err != nil {

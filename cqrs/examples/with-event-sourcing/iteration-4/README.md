@@ -2,22 +2,26 @@
 
 In Iteration 4 of `with-event-sourcing`, streams grow across repeating `AddOrderItem` (`OrderItemAdded`) commands and pair the pure **Decider** (`InitialOrder`, `Decide*`, `EvolveOrder`) with automatic compressed stream snapshots from [`eventsalsa.dev/snapshot`](../../../../snapshot/).
 
-Instead of mixing environment settings, codec/projection wiring, bus middlewares, and storage bootstrapping into one file, `iteration-4` cleanly splits each responsibility:
+Each layer has a clear owner:
 
-- [`internal/config/`](./internal/config/): Typed runtime configuration (`Config`, `SnapshotConfig`, `RetryConfig`), environment loading (`LoadEnv` / `FromEnv`), and validation (`Validate`).
-- [`internal/infra/persistence/order_adapter.go`](./internal/infra/persistence/order_adapter.go): Storage adapter assembly pairing `OrderDecider`, `eventmap-gen` codecs, `OrderOverviewProjection`, and [`postgres.NewSnapshotAdapter`](../../../persistence/postgres/) (`snapshotpostgres.NewStore`, `snapshot.JSON[domain.Order]()`, `snapshot.EveryNEvents(3)`, `snapshot.Gzip()`, state-version parity verification).
-- [`app.go`](./app.go): Application lifecycle (`openApp`, `close`), `pgxpool` connection setup, schema migration installation, and concrete store initialization.
-- [`buses.go`](./buses.go): Command/query bus construction, retry/rejection policies, and Decider-to-ACL handler registration over `persistence.Adapter[domain.Order, any]`.
+- [`config/`](./config/): Top-level runtime configuration (`Config`, `SnapshotConfig`, `RetryConfig`), environment loading (`LoadEnv` / `FromEnv`), and `Validate`.
+- [`bootstrap/`](./bootstrap/): Dedicated composition root (`Open`, `Close`, `NewCommandBus`, `RegisterOrderCommands`, `NewQueryBus`) wiring pools, stores, `postgres.IsConcurrencyConflict` retries, `domain.IsRejection` + `acl.ErrEmptyCommand` classification, and ACL command translators.
+- [`internal/infra/persistence/order_snapshot_adapter.go`](./internal/infra/persistence/order_snapshot_adapter.go): Functional-option builder (`NewOrderSnapshotAdapter`) pairing `OrderDecider`, `eventmap-gen` codecs, `OrderOverviewProjection`, and [`postgres.NewSnapshotAdapter`](../../../persistence/postgres/) (`snapshotpostgres.NewStore`, `snapshot.JSON[domain.Order]()`, `snapshot.EveryNEvents(3)`, `snapshot.Gzip()`, state-version parity verification).
 
 ## Package Layout
 
 ```text
 iteration-4/
 ├── generate.go                                  # //go:generate protoc directives
-├── main.go                                      # Entrypoint loading env config and running commands & query
-├── app.go                                       # App container lifecycle (pgxpool, schema, stores, adapter, buses)
-├── buses.go                                     # Command & query bus middlewares, classifiers, and ACL handler binding
-├── main_test.go                                 # End-to-end flow, OCC retry, config guard, and nil-proto ACL/query tests
+├── main.go                                      # Thin entrypoint calling config.LoadEnv + bootstrap.Open
+├── config/                                      # Top-level runtime config, env loading, and validation
+│   ├── config.go
+│   └── config_test.go
+├── bootstrap/                                   # Composition root & bus wiring
+│   ├── bootstrap.go                             # App container (Open, Close)
+│   ├── command_bus.go                           # NewCommandBus, RegisterOrderCommands, error classification
+│   ├── query_bus.go                             # NewQueryBus
+│   └── bootstrap_test.go                        # Bus/ACL/OCC/guard unit tests
 ├── commands/                                    # Public Protobuf command contracts
 │   ├── place_order.proto / .pb.go
 │   ├── add_order_item.proto / .pb.go
@@ -26,11 +30,8 @@ iteration-4/
 │   ├── get_order_overview.proto / .pb.go
 │   └── order_overview.proto / .pb.go
 └── internal/
-    ├── config/                                  # Runtime Config, Default/FromEnv loading, and validation
-    │   ├── config.go
-    │   └── config_test.go
-    ├── domain/                                  # Pure Functional Decider (zero store/snapshot/pgx/proto imports)
-    │   ├── errors.go
+    ├── domain/                                  # Pure Functional Decider (zero store/snapshot/pgx/proto/cqrs imports)
+    │   ├── errors.go                            # Sentinels + pure domain.IsRejection predicate
     │   ├── order.go                             # Order state with JSON tags & Version parity counter
     │   ├── place_order.go
     │   ├── add_order_item.go
@@ -41,10 +42,10 @@ iteration-4/
     │       ├── order_item_added.go
     │       └── order_confirmed.go
     └── infra/
-        ├── acl/                                 # command.Func adapters translating proto -> domain commands
-        ├── persistence/                         # store + snapshot DDL, eventmap-gen, OrderOverviewProjection, NewOrderAdapter
-        │   ├── order_adapter.go
-        │   ├── order_adapter_test.go
+        ├── acl/                                 # command.Func ACL translators (Protobuf -> domain commands)
+        ├── persistence/                         # store + snapshot DDL, eventmap-gen, OrderOverviewProjection, NewOrderSnapshotAdapter
+        │   ├── order_snapshot_adapter.go
+        │   ├── order_snapshot_adapter_test.go
         │   ├── generate.go
         │   ├── event_mapping.gen.go / _test.go
         │   ├── schema.go

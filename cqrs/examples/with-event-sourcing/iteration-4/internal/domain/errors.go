@@ -14,3 +14,13 @@ var (
 	// ErrEmptySKU indicates a line item SKU was empty or whitespace.
 	ErrEmptySKU = errors.New("sku must not be blank")
 )
+
+// IsRejection reports whether err represents a domain invariant violation rather than an
+// infrastructure failure.
+func IsRejection(err error) bool {
+	return errors.Is(err, ErrInvalidAmount) ||
+		errors.Is(err, ErrAlreadyPlaced) ||
+		errors.Is(err, ErrAlreadyConfirmed) ||
+		errors.Is(err, ErrNotPlaced) ||
+		errors.Is(err, ErrEmptySKU)
+}
