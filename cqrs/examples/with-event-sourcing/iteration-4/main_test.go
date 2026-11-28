@@ -11,9 +11,11 @@ import (
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/command"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/commands"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/config"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/domain"
 	domainevents "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/domain/events"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/infra/acl"
+	infrapersistence "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/infra/persistence"
 	infraqueries "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/infra/queries"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/queries"
 	"eventsalsa.dev/cqrs/persistence"
@@ -70,7 +72,7 @@ func TestIteration4ACLAndDeciderFlow(t *testing.T) {
 		command.WithMiddleware(
 			command.ObservabilityMiddleware(),
 			command.RetryMiddleware(command.RetryConfig{
-				MaxAttempts: 3,
+				MaxAttempts: config.Default().Retry.MaxAttempts,
 				RetryIf:     isRetryableError,
 			}),
 		),
@@ -82,7 +84,7 @@ func TestIteration4ACLAndDeciderFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBus: %v", err)
 	}
-	orders := persistence.FromEventRepository(repo, orderDecider())
+	orders := persistence.FromEventRepository(repo, infrapersistence.OrderDecider())
 	if regErr := registerCommandHandlers(bus, orders); regErr != nil {
 		t.Fatalf("registerCommandHandlers: %v", regErr)
 	}
@@ -174,7 +176,7 @@ func TestIteration4ACLNilSafety(t *testing.T) {
 
 	ctx := cqrs.WithTraceID(context.Background(), "test-nil-trace")
 	repo := newStubEventRepository()
-	orders := persistence.FromEventRepository(repo, orderDecider())
+	orders := persistence.FromEventRepository(repo, infrapersistence.OrderDecider())
 
 	placeACL := acl.NewPlaceOrderACL(persistence.MustNewCommandHandler(
 		orders,
@@ -223,5 +225,14 @@ func TestIteration4ACLNilSafety(t *testing.T) {
 		err, query.ErrNilQuery,
 	) {
 		t.Fatalf("Execute(nil) err = %v, want %v", err, query.ErrNilQuery)
+	}
+
+	if _, err := openApp(ctx, config.Config{}); !errors.Is(err, config.ErrBlankDatabaseURL) {
+		t.Fatalf("openApp(zero cfg) err = %v, want %v", err, config.ErrBlankDatabaseURL)
+	}
+	if _, err := newCommandBus(config.Default().Retry, persistence.Adapter[domain.Order, any]{}); !errors.Is(
+		err, persistence.ErrNilAdapter,
+	) {
+		t.Fatalf("newCommandBus(zero adapter) err = %v, want %v", err, persistence.ErrNilAdapter)
 	}
 }

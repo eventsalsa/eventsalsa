@@ -11,18 +11,18 @@ import (
 
 	"eventsalsa.dev/cqrs"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/commands"
+	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/internal/config"
 	"eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/queries"
 	"eventsalsa.dev/cqrs/query"
 )
 
 func run(ctx context.Context) error {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		// #nosec G101 -- local development example default DSN
-		dsn = "postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=disable" //nolint:gosec // local DSN
+	cfg, err := config.LoadEnv()
+	if err != nil {
+		return err
 	}
 
-	app, err := openApp(ctx, dsn)
+	app, err := openApp(ctx, cfg)
 	if err != nil {
 		return err
 	}
