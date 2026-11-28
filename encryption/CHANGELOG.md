@@ -2,6 +2,13 @@
 
 > **Monorepo Cutover (`v0.1.0`+):** After `v0.0.6`, `encryption` moved from `github.com/eventsalsa/encryption` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/encryption` (with `kek/awskms` and `kek/gcpkms` tagged starting at `v0.0.1`). Historical entries below are preserved from the original repository.
 
+## [0.2.0](https://github.com/eventsalsa/eventsalsa/compare/encryption/v0.1.0...encryption/v0.2.0) (2026-11-28)
+
+
+### Features
+
+* **cqrs:** add transport-free cqrs module, spectest, docs, and CI wiring ([#28](https://github.com/eventsalsa/eventsalsa/issues/28)) ([a1a47e1](https://github.com/eventsalsa/eventsalsa/commit/a1a47e14294e5879cf6d9166dcab3ec6c7baae93))
+
 ## [0.1.0](https://github.com/eventsalsa/eventsalsa/compare/encryption/v0.0.6...encryption/v0.1.0) (2026-11-19)
 
 

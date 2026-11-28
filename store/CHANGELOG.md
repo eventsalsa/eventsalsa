@@ -2,6 +2,17 @@
 
 > **Monorepo Cutover (`v0.3.0`+):** After `v0.2.0`, `store` moved from `github.com/eventsalsa/store` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under the vanity import path `eventsalsa.dev/store`. Historical entries below are preserved from the original repository.
 
+## [0.5.0](https://github.com/eventsalsa/eventsalsa/compare/store/v0.4.0...store/v0.5.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **store:** store.Event.CorrelationID, store.PersistedEvent.CorrelationID, eventmap-gen WithCorrelationID, and the correlation_id SQL column and idx_events_correlation index have been removed; duplicate event_id violations now return store.ErrDuplicateEventID instead of store.ErrOptimisticConcurrency. See store/UPGRADING.md for zero-downtime v0.4.0 -> v0.5.0 migration steps.
+
+### Features
+
+* **store:** drop correlation_id, index trace_id, and harden store/eventmap APIs ([#29](https://github.com/eventsalsa/eventsalsa/issues/29)) ([f2814ea](https://github.com/eventsalsa/eventsalsa/commit/f2814ea9534edade6d60cb1afdbf8467d3c29ee3))
+
 ## [0.4.0](https://github.com/eventsalsa/eventsalsa/compare/store/v0.3.0...store/v0.4.0) (2026-11-19)
 
 

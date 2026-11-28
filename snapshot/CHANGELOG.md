@@ -2,6 +2,13 @@
 
 > **Monorepo Cutover (`v0.0.2`+):** After `0.0.1`, `snapshot` moved from `github.com/eventsalsa/snapshot` into [`github.com/eventsalsa/eventsalsa`](https://github.com/eventsalsa/eventsalsa) under `eventsalsa.dev/snapshot`. Historical entries below are preserved from the original repository.
 
+## [0.0.3](https://github.com/eventsalsa/eventsalsa/compare/snapshot/v0.0.2...snapshot/v0.0.3) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** bump eventsalsa.dev/store ([#31](https://github.com/eventsalsa/eventsalsa/issues/31)) ([8839824](https://github.com/eventsalsa/eventsalsa/commit/883982455b707dc04de827aa8ed2ece42b82fe09))
+
 ## [0.0.2](https://github.com/eventsalsa/eventsalsa/compare/snapshot/v0.0.1...snapshot/v0.0.2) (2026-11-19)
 
 
