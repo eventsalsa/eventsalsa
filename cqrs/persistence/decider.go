@@ -30,10 +30,21 @@ func (d Decider[S, E]) fold(state S, events []E) S {
 // NewCommandHandler can execute load, fold, decide, and optimistic-concurrency commit
 // identically across state-based and event-sourced storage.
 //
-// Construct an Adapter using FromStateRepository or FromEventRepository.
+// Construct an Adapter using FromStateRepository, FromEventRepository, or NewAdapter.
 type Adapter[S any, E any] struct {
 	exec func(ctx context.Context, id string, decideFn func(state S) ([]E, error)) error
 	err  error
+}
+
+// NewAdapter wraps a custom persistence execution function into an Adapter[S, E] usable
+// with NewCommandHandler. If fn is nil, NewCommandHandler returns ErrNilAdapter.
+func NewAdapter[S any, E any](
+	fn func(ctx context.Context, id string, decide func(state S) ([]E, error)) error,
+) Adapter[S, E] {
+	if fn == nil {
+		return Adapter[S, E]{err: ErrNilAdapter}
+	}
+	return Adapter[S, E]{exec: fn}
 }
 
 func newAdapter[S any, E any](

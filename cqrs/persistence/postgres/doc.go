@@ -14,4 +14,7 @@
 //     stream or SQL+stream atomicity is needed, and pair it either with NewTxEventRepository
 //     (which uses RequireTx and returns ErrMissingTx if absent) or explicit LoadTx / AppendTx
 //     calls with caller-managed pgx.Tx.
+//   - Snapshotted event sourcing: NewSnapshotAdapter and NewTxSnapshotAdapter pair
+//     eventsalsa.dev/snapshot (periodic Save with savepoint isolation or atomic rollback,
+//     upcasters, and payload transformers) with eventsalsa.dev/cqrs/persistence.Adapter.
 package postgres

@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package orders.es.v4.queries.v1;
+
+option go_package = "eventsalsa.dev/cqrs/examples/with-event-sourcing/iteration-4/queries;queries";
+
+// GetOrderOverview requests the projected read view for a single order.
+message GetOrderOverview {
+  string order_id = 1;
+}

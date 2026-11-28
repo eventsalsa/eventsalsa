@@ -13,6 +13,7 @@ import (
 
 	"eventsalsa.dev/cqrs/persistence"
 	"eventsalsa.dev/cqrs/persistence/postgres"
+	"eventsalsa.dev/snapshot"
 	"eventsalsa.dev/store"
 )
 
@@ -21,6 +22,7 @@ type spyTx struct {
 	db                  *spyDB
 	id                  int
 	txOpts              pgx.TxOptions
+	isSubTx             bool
 	committed           bool
 	rolledBack          bool
 	rollbackCtxErr      error
@@ -28,6 +30,27 @@ type spyTx struct {
 	hasRollbackDeadline bool
 	commitErr           error
 	rollbackErr         error
+	subBeginErr         error
+	subCommitErr        error
+	subRollbackErr      error
+	subTxs              []*spyTx
+}
+
+func (tx *spyTx) Begin(_ context.Context) (pgx.Tx, error) {
+	tx.db.recordTimeline(tx.label() + ":sp_begin")
+	if tx.subBeginErr != nil {
+		return nil, tx.subBeginErr
+	}
+	sub := &spyTx{
+		db:          tx.db,
+		id:          tx.id*100 + len(tx.subTxs) + 1,
+		txOpts:      tx.txOpts,
+		isSubTx:     true,
+		commitErr:   tx.subCommitErr,
+		rollbackErr: tx.subRollbackErr,
+	}
+	tx.subTxs = append(tx.subTxs, sub)
+	return sub, nil
 }
 
 func (tx *spyTx) Commit(_ context.Context) error {
@@ -57,6 +80,9 @@ func (tx *spyTx) Rollback(ctx context.Context) error {
 }
 
 func (tx *spyTx) label() string {
+	if tx.isSubTx {
+		return "sp"
+	}
 	if tx.txOpts.AccessMode == pgx.ReadOnly {
 		return "read_tx"
 	}
@@ -64,14 +90,16 @@ func (tx *spyTx) label() string {
 }
 
 type spyDB struct {
-	mu           sync.Mutex
-	beginErr     error
-	returnNilTx  bool
-	typedNilTx   bool
-	nextCommit   error
-	nextRollback error
-	txs          []*spyTx
-	timeline     []string
+	mu                sync.Mutex
+	beginErr          error
+	returnNilTx       bool
+	typedNilTx        bool
+	nextCommit        error
+	nextRollback      error
+	nextSubBeginErr   error
+	nextSubRollbackEr error
+	txs               []*spyTx
+	timeline          []string
 }
 
 func (db *spyDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // hugeParam: implements postgres.TxBeginner
@@ -95,6 +123,12 @@ func (db *spyDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) 
 		txOpts:      opts,
 		commitErr:   db.nextCommit,
 		rollbackErr: db.nextRollback,
+	}
+	if opts.AccessMode != pgx.ReadOnly {
+		tx.subBeginErr = db.nextSubBeginErr
+		tx.subRollbackErr = db.nextSubRollbackEr
+		db.nextSubBeginErr = nil
+		db.nextSubRollbackEr = nil
 	}
 	db.nextCommit = nil
 	db.nextRollback = nil
@@ -316,4 +350,95 @@ func (w splitEventStore) Append(
 	events []store.Event,
 ) (store.AppendResult, error) {
 	return w.es.Append(ctx, tx, expectedVersion, events)
+}
+
+type spySnapshotStore struct {
+	mu       sync.Mutex
+	db       *spyDB
+	snaps    map[string]map[int]snapshot.Snapshot
+	getErr   error
+	putErr   error
+	getCalls int
+	putCalls int
+}
+
+func newSpySnapshotStore(db *spyDB) *spySnapshotStore {
+	return &spySnapshotStore{
+		db:    db,
+		snaps: make(map[string]map[int]snapshot.Snapshot),
+	}
+}
+
+func (s *spySnapshotStore) Get(
+	_ context.Context,
+	_ pgx.Tx,
+	streamType, streamID string,
+	maxSchemaVersion int,
+) (snapshot.Snapshot, error) {
+	if s.db != nil {
+		s.db.recordTimeline("snapshot:get")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.getCalls++
+	if s.getErr != nil {
+		return snapshot.Snapshot{}, s.getErr
+	}
+	bySchema := s.snaps[streamKey(streamType, streamID)]
+	var (
+		best   snapshot.Snapshot
+		bestSV int
+	)
+	for sv, snap := range bySchema {
+		if sv <= maxSchemaVersion && sv > bestSV {
+			bestSV = sv
+			best = snap
+		}
+	}
+	return best, nil
+}
+
+func (s *spySnapshotStore) Put(_ context.Context, _ pgx.Tx, snap *snapshot.Snapshot) error {
+	if s.db != nil {
+		s.db.recordTimeline("snapshot:put")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.putCalls++
+	if s.putErr != nil {
+		return s.putErr
+	}
+	key := streamKey(snap.StreamType, snap.StreamID)
+	bySchema, ok := s.snaps[key]
+	if !ok {
+		bySchema = make(map[int]snapshot.Snapshot)
+		s.snaps[key] = bySchema
+	}
+	cp := *snap
+	cp.Payload = append([]byte(nil), snap.Payload...)
+	bySchema[snap.SchemaVersion] = cp
+	return nil
+}
+
+func (s *spySnapshotStore) latest(streamType, streamID string, schemaVersion int) (snapshot.Snapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap, ok := s.snaps[streamKey(streamType, streamID)][schemaVersion]
+	return snap, ok
+}
+
+type spyLogger struct {
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *spyLogger) Debug(_ context.Context, _ string, _ ...any) {}
+func (l *spyLogger) Info(_ context.Context, _ string, _ ...any)  {}
+func (l *spyLogger) Warn(_ context.Context, _ string, _ ...any)  {}
+func (l *spyLogger) Error(_ context.Context, msg string, _ ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, msg)
 }

@@ -43,6 +43,18 @@ var (
 
 	// ErrStreamMismatch indicates EventCodec.Encode returned an unexpected StreamType or StreamID.
 	ErrStreamMismatch = errors.New("postgres: encoded event stream mismatch")
+
+	// ErrNilSnapshotStore indicates a nil or typed-nil snapshot.Store was supplied.
+	ErrNilSnapshotStore = errors.New("postgres: snapshot store cannot be nil")
+
+	// ErrNilSnapshotCodec indicates a nil or typed-nil snapshot.Codec was supplied.
+	ErrNilSnapshotCodec = errors.New("postgres: snapshot codec cannot be nil")
+
+	// ErrNilSnapshotPolicy indicates a nil snapshot.Policy was supplied.
+	ErrNilSnapshotPolicy = errors.New("postgres: snapshot policy cannot be nil")
+
+	// ErrNilPayloadTransformer indicates a nil or typed-nil snapshot.PayloadTransformer was supplied.
+	ErrNilPayloadTransformer = errors.New("postgres: snapshot payload transformer cannot be nil")
 )
 
 type concurrencyConflictError struct {

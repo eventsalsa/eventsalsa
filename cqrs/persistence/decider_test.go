@@ -85,6 +85,7 @@ func TestNewCommandHandler_Validation(t *testing.T) {
 		wantErr error
 	}{
 		{name: "zero adapter", adapter: persistence.Adapter[counterState, any]{}, idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilAdapter},
+		{name: "nil NewAdapter func", adapter: persistence.NewAdapter[counterState, any](nil), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilAdapter},
 		{name: "nil state repo", adapter: persistence.FromStateRepository[counterState, any](nil, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
 		{name: "typed-nil state repo", adapter: persistence.FromStateRepository(typedNilStateRepo, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
 		{name: "nil event repo", adapter: persistence.FromEventRepository[counterState, any](nil, d), idOf: addID, decide: decideAdd, wantErr: persistence.ErrNilRepository},
@@ -156,5 +157,57 @@ func TestCommandHandler_InputGuards(t *testing.T) {
 	}
 	if eventRepo.loadCalls != 0 || eventRepo.appendCalls != 0 {
 		t.Fatalf("eventRepo should not be touched on invalid inputs, got load=%d append=%d", eventRepo.loadCalls, eventRepo.appendCalls)
+	}
+}
+
+func TestNewAdapter_CustomExecutionAndGuards(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	wantErr := errors.New("custom adapter fault")
+	var (
+		called int
+		gotID  string
+	)
+	adapter := persistence.NewAdapter[counterState, any](func(_ context.Context, id string, decide func(counterState) ([]any, error)) error {
+		called++
+		gotID = id
+		evs, err := decide(counterState{id: id, count: 5})
+		if err != nil {
+			return err
+		}
+		if len(evs) != 1 {
+			return errors.New("expected 1 event")
+		}
+		return nil
+	})
+
+	h := persistence.MustNewCommandHandler(adapter, addID, decideAdd)
+	if err := h.Handle(nil, addCmd{id: "c-1", delta: 1}); !errors.Is(err, persistence.ErrNilContext) { //nolint:staticcheck // testing explicit nil ctx guard
+		t.Fatalf("nil ctx err = %v, want ErrNilContext", err)
+	}
+	if err := h.Handle(ctx, addCmd{id: "  ", delta: 1}); !errors.Is(err, persistence.ErrEmptyTargetID) {
+		t.Fatalf("blank id err = %v, want ErrEmptyTargetID", err)
+	}
+	if called != 0 {
+		t.Fatalf("custom adapter called %d times on invalid input, want 0", called)
+	}
+
+	if err := h.Handle(ctx, addCmd{id: "c-9", delta: 3}); err != nil {
+		t.Fatalf("Handle valid err = %v", err)
+	}
+	if called != 1 || gotID != "c-9" {
+		t.Fatalf("called=%d id=%q, want 1 / c-9", called, gotID)
+	}
+	if err := h.Handle(ctx, addCmd{id: "c-9", delta: 0}); err == nil {
+		t.Fatal("expected decide error to propagate")
+	}
+
+	errAdapter := persistence.NewAdapter[counterState, any](func(context.Context, string, func(counterState) ([]any, error)) error {
+		return wantErr
+	})
+	errH := persistence.MustNewCommandHandler(errAdapter, addID, decideAdd)
+	if err := errH.Handle(ctx, addCmd{id: "c-9", delta: 1}); !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
 }

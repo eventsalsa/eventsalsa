@@ -10,6 +10,7 @@ Runnable examples illustrating how `eventsalsa.dev/cqrs` adapts to different arc
 | [`with-event-sourcing/iteration-1`](./with-event-sourcing/iteration-1/) | With `eventsalsa/store` Event Sourcing | Exported Go structs (`commands/`, `queries/`) | `Order` aggregate & `OrderRepository` (`Load`/`Save`) in `internal/domain`, write handlers in `internal/application`, and `internal/infra` PostgreSQL tx + `eventmap-gen` mappings + `eventsalsa/store` + inline projection. |
 | [`with-event-sourcing/iteration-2`](./with-event-sourcing/iteration-2/) | With `eventsalsa/store` Event Sourcing | Compiled Protobuf (`commands/`, `queries/`) | `command.Func` ACL adapters (`internal/infra/acl`), internal `internal/application` use-case commands, OOP `Order` aggregate & `OrderRepository`, `eventmap-gen` + `eventsalsa/store` persistence, and Protobuf read views. |
 | [`with-event-sourcing/iteration-3`](./with-event-sourcing/iteration-3/) | With `eventsalsa/store` Event Sourcing | Compiled Protobuf (`commands/`, `queries/`) | `command.Func` ACL adapters, `eventsalsa.dev/cqrs/persistence` generic `Decider`/`FromEventRepository`/`NewCommandHandler`, `eventsalsa.dev/cqrs/persistence/postgres` (`NewEventRepository` + `NewEventMapCodec` + narrow-by-default transactions), pure `Initial`/`Decide`/`Evolve` Decider tested with `cqrs/spectest`, and Protobuf read views. |
+| [`with-event-sourcing/iteration-4`](./with-event-sourcing/iteration-4/) | With `eventsalsa/store` + `eventsalsa/snapshot` | Compiled Protobuf (`commands/`, `queries/`) | Extends `iteration-3` with `AddOrderItem` commands and `postgres.NewSnapshotAdapter` (`snapshotpostgres.NewStore`, `EveryNEvents(3)`, `Gzip`, state version parity check) behind `persistence.Adapter`. |
 
 ## Running the Examples
 
@@ -30,4 +31,6 @@ DATABASE_URL="postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=dis
   go run ./with-event-sourcing/iteration-2
 DATABASE_URL="postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=disable" \
   go run ./with-event-sourcing/iteration-3
+DATABASE_URL="postgres://postgres:postgres@localhost:5432/eventsalsa?sslmode=disable" \
+  go run ./with-event-sourcing/iteration-4
 ```

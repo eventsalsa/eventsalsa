@@ -6,6 +6,7 @@ replace (
 	eventsalsa.dev/cqrs => ../
 	eventsalsa.dev/cqrs/persistence => ../persistence
 	eventsalsa.dev/cqrs/persistence/postgres => ../persistence/postgres
+	eventsalsa.dev/snapshot => ../../snapshot
 	eventsalsa.dev/store => ../../store
 )
 
@@ -13,6 +14,7 @@ require (
 	eventsalsa.dev/cqrs v0.0.0-00010101000000-000000000000
 	eventsalsa.dev/cqrs/persistence v0.0.0-00010101000000-000000000000
 	eventsalsa.dev/cqrs/persistence/postgres v0.0.0-00010101000000-000000000000
+	eventsalsa.dev/snapshot v0.0.2
 	eventsalsa.dev/store v0.4.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.13.0

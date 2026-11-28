@@ -141,8 +141,8 @@ jobs:
                   (.key == "encryption_examples" and ($encryption_examples == "true" or $encryption == "true")) or
                   (.key == "cqrs" and $cqrs == "true") or
                   (.key == "cqrs_persistence" and ($cqrs_persistence == "true" or $cqrs == "true")) or
-                  (.key == "cqrs_persistence_postgres" and ($cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true")) or
-                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true"))
+                  (.key == "cqrs_persistence_postgres" and ($cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true" or $snapshot == "true")) or
+                  (.key == "cqrs_examples" and ($cqrs_examples == "true" or $cqrs_persistence_postgres == "true" or $cqrs_persistence == "true" or $cqrs == "true" or $store == "true" or $snapshot == "true"))
                 ) ]')
           fi
           if [ "$TARGET" = "security" ]; then
